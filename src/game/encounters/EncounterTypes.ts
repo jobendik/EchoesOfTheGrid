@@ -51,6 +51,8 @@ export interface EventChoice {
   outcomes: readonly EventChoiceOutcome[];
 }
 
+export type EventOutcome = EventChoiceOutcome;
+
 export interface EventDefinition {
   id: EventId;
   title: string;

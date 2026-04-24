@@ -14,6 +14,8 @@ export const Balance = {
   combat: {
     defaultGridWidth: 8,
     defaultGridHeight: 6,
+    /** Fraction of maxHp restored at a rest site. */
+    restHealFraction: 0.3,
   },
   statuses: {
     burnPerTurnDamage: 2,
