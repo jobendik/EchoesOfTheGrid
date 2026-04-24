@@ -69,13 +69,14 @@ export function generateMap(rng: RNG): MapNode[] {
 function chooseKind(layer: number, _col: number, totalLayers: number, rng: RNG): MapNode["kind"] {
   if (layer === totalLayers - 1) return "boss";
   if (layer === 0) return "combat";
-  // Mid-run: mix of combat, event, rest, elite, upgrade.
+  // Mid-run: mix of combat, event, rest, elite, upgrade, shop.
   const rolls: { kind: MapNode["kind"]; w: number }[] = [
     { kind: "combat", w: 5 },
     { kind: "elite", w: layer >= 2 ? 2 : 0 },
     { kind: "event", w: 2 },
     { kind: "rest", w: layer >= 2 ? 2 : 1 },
     { kind: "upgrade", w: 1 },
+    { kind: "shop", w: layer >= 1 ? 2 : 0 },
   ];
   const total = rolls.reduce((s, r) => s + r.w, 0);
   let t = rng.next() * total;
@@ -89,6 +90,7 @@ function chooseKind(layer: number, _col: number, totalLayers: number, rng: RNG):
 function chooseEncounter(kind: MapNode["kind"], layer: number, rng: RNG): string {
   if (kind === "rest") return "enc_rest";
   if (kind === "upgrade") return "enc_upgrade";
+  if (kind === "shop") return "enc_shop";
   if (kind === "event") {
     // Events are handled via EventDatabase — we encode them via a special
     // encounterId prefix "ev_". The run controller dispatches accordingly.

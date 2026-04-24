@@ -623,3 +623,24 @@ h3 { font-size: 16px; }
   .combat-main { grid-template-columns: 1fr 220px; }
   .hero-plate { flex: 0 0 150px; padding: 8px; }
 }
+
+.run-summary {
+  margin: 14px 0 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  background: var(--c-bg-1);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+}
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 2px 0;
+}
+.summary-value {
+  color: var(--c-fg);
+  font-variant-numeric: tabular-nums;
+}

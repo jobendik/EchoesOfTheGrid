@@ -97,5 +97,17 @@ function sanitizeLoadedRun(r: SerializedRun): RunState {
     completedNodeIds: r.completedNodeIds ?? [],
     flags: r.flags ?? {},
     rngState: r.rngState ?? 1,
+    pendingReward: r.pendingReward ?? null,
+    stats: r.stats ?? {
+      enemiesDefeated: 0,
+      damageDealt: 0,
+      damageTaken: 0,
+      goldEarned: 0,
+      cardsAdded: 0,
+      cardsRemoved: 0,
+      cardsUpgraded: 0,
+      relicsCollected: 0,
+      turnsTaken: 0,
+    },
   };
 }

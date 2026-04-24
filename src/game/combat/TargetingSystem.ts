@@ -55,6 +55,15 @@ export function isValidTarget(
   const dist = manhattan(caster.pos, target);
   if (dist > t.range) return false;
 
+  // Line-shaped effects must be cast along a cardinal direction from the
+  // caster, otherwise the resulting line can't be drawn sensibly.
+  if (t.area.kind === "line") {
+    const dx = target.x - caster.pos.x;
+    const dy = target.y - caster.pos.y;
+    if (dx !== 0 && dy !== 0) return false;
+    if (dx === 0 && dy === 0) return false;
+  }
+
   const unit = unitAt(state, target);
   switch (t.kind) {
     case "enemy":

@@ -43,7 +43,15 @@ export interface CombatEvents {
 
 export interface CombatSetup {
   encounterId: string;
-  heroes: { heroClass: HeroClassId; startingDeck: readonly string[]; upgraded?: readonly string[] }[];
+  heroes: {
+    heroClass: HeroClassId;
+    startingDeck: readonly string[];
+    upgraded?: readonly string[];
+    /** Current HP carried from the run state. Defaults to maxHp. */
+    hp?: number;
+    /** Max HP carried from the run state. Defaults to class blueprint. */
+    maxHp?: number;
+  }[];
   relics: RelicId[];
   seed: number;
 }
@@ -95,6 +103,8 @@ export class CombatController {
         attacksThisTurn: 0,
         cardsPlayedThisTurn: 0,
         preventLethalCharges: this.setup.relics.includes("failsafe_core") ? 1 : 0,
+        zeroCostCardActive: false,
+        deathEventsEmitted: new Set(),
       },
       drawPile: draw,
       hand: [],
@@ -113,7 +123,11 @@ export class CombatController {
     // Place heroes at the left side of the grid
     for (let i = 0; i < this.setup.heroes.length; i++) {
       const pos: GridPos = { x: 1, y: 1 + i * 2 };
-      const u = createHero(this.setup.heroes[i].heroClass, pos);
+      const runHero = this.setup.heroes[i];
+      const u = createHero(runHero.heroClass, pos, {
+        hp: runHero.hp,
+        maxHp: runHero.maxHp,
+      });
       state.units.set(u.id, u);
       state.player.heroIds.push(u.id);
     }
@@ -148,12 +162,56 @@ export class CombatController {
     shuffleIntoDraw(this.state, this.rng);
     // Move innate cards to start of draw pile so they land in hand.
     // (Not critical for this prototype since no innate cards exist.)
-    drawCards(this.state, this.state.player.startingHandSize, this.rng, this.state.player.handLimit);
+    this.drawCardsWithSideEffects(this.state.player.startingHandSize);
     this.state.phase = "player_turn";
     this.state.turn = 1;
+    // First-card discount is available from the first turn onward.
+    this.firstCardDiscountAvailable = this.state.player.relics.includes("first_move");
+    // Grant energy from energy tiles on turn 1.
+    this.grantEnergyTileBonuses();
     this.regenerateIntents();
     this.events.emit("turnStart", { side: "player", turn: 1 });
     this.events.emit("stateChanged", { reason: "combat_start" });
+  }
+
+  /**
+   * Grants +1 energy for each hero currently standing on an energy tile.
+   * Called at the start of every player turn.
+   */
+  private grantEnergyTileBonuses(): void {
+    const seen = new Set<string>();
+    for (const h of this.heroes()) {
+      const key = `${h.pos.x},${h.pos.y}`;
+      if (seen.has(key)) continue;
+      if (this.state.grid.getKind(h.pos) === "energy") {
+        seen.add(key);
+        this.state.player.energy += 1;
+        this.state.log.push({
+          ts: Date.now(),
+          kind: "info",
+          text: `${h.name} taps an energy node (+1 energy).`,
+        });
+      }
+    }
+  }
+
+  /**
+   * Draw cards and apply on-draw side effects (e.g. Glitch curse drains
+   * 1 energy per copy drawn). Returns the number of cards actually drawn.
+   */
+  private drawCardsWithSideEffects(n: number): number {
+    const drawn = drawCards(this.state, n, this.rng, this.state.player.handLimit);
+    for (const card of drawn) {
+      if (card.defId === "glitch") {
+        this.state.player.energy = Math.max(0, this.state.player.energy - 1);
+        this.state.log.push({
+          ts: Date.now(),
+          kind: "info",
+          text: "Glitch drained 1 energy on draw.",
+        });
+      }
+    }
+    return drawn.length;
   }
 
   private applyCombatStartRelics(): void {
@@ -167,6 +225,33 @@ export class CombatController {
         this.state.player.energy += 1;
       }
     }
+    // Class-based passives: each hero gets a small identity boost at the
+    // start of every combat. These reinforce the hero's intended role.
+    for (const h of this.heroes()) {
+      if (h.heroClass === "vanguard") {
+        // Frontliner: starts braced.
+        h.statuses["shield"] = (h.statuses["shield"] ?? 0) + 3;
+      } else if (h.heroClass === "riftblade") {
+        // Striker: starts with +1 Strength so the first burst hurts.
+        h.statuses["strength"] = (h.statuses["strength"] ?? 0) + 1;
+      } else if (h.heroClass === "signalist") {
+        // Control: auto-Marks the nearest enemy for 2 turns.
+        const nearest = this.nearestEnemyTo(h.pos);
+        if (nearest) {
+          nearest.statuses["marked"] = Math.max(nearest.statuses["marked"] ?? 0, 2);
+        }
+      }
+    }
+  }
+
+  private nearestEnemyTo(pos: GridPos): Unit | undefined {
+    let best: Unit | undefined;
+    let bestDist = Infinity;
+    for (const e of this.enemies()) {
+      const d = Math.abs(e.pos.x - pos.x) + Math.abs(e.pos.y - pos.y);
+      if (d < bestDist) { best = e; bestDist = d; }
+    }
+    return best;
   }
 
   heroes(): Unit[] {
@@ -242,10 +327,10 @@ export class CombatController {
     const affected = computeAffectedTiles(this.state, caster, def, t);
     const effects = (card.upgraded && def.upgradedEffects) ? def.upgradedEffects : def.effects;
 
-    // Zero-cost bonus damage relic
-    if (cost === 0 && this.state.player.relics.includes("scrap_multiplier")) {
-      // Applied at damage time by searching relics; this check kept for clarity.
-    }
+    // Zero-cost bonus damage relic (scrap_multiplier): set flag so the
+    // damage system can consume it during this card's effects.
+    const hadScrap = cost === 0 && this.state.player.relics.includes("scrap_multiplier");
+    this.state.player.zeroCostCardActive = hadScrap;
 
     applyCardEffects({
       state: this.state,
@@ -258,6 +343,9 @@ export class CombatController {
       effects,
     });
 
+    // Always clear the flag after resolution.
+    this.state.player.zeroCostCardActive = false;
+
     // Movement card relic: shield on move card
     if (def.type === "movement" && this.state.player.relics.includes("warding_stride")) {
       caster.statuses["shield"] = (caster.statuses["shield"] ?? 0) + 2;
@@ -268,7 +356,7 @@ export class CombatController {
 
     // Resolve pending draws (from drawCards effects)
     const pending = consumePendingDraws(this.state);
-    if (pending > 0) drawCards(this.state, pending, this.rng, this.state.player.handLimit);
+    if (pending > 0) this.drawCardsWithSideEffects(pending);
 
     // Exhaust / discard
     if (def.exhaust) this.state.exhaustPile.push(card);
@@ -305,6 +393,19 @@ export class CombatController {
         }
       }
     }
+    // Objective tiles: each hero standing on one gains 2 Shield.
+    for (const h of this.heroes()) {
+      if (this.state.grid.getKind(h.pos) === "objective") {
+        h.statuses["shield"] = (h.statuses["shield"] ?? 0) + 2;
+        this.state.log.push({
+          ts: Date.now(),
+          kind: "status",
+          text: `${h.name} holds the objective (+2 Shield).`,
+        });
+      }
+    }
+    // Decay player-owned statuses at the end of the player's turn.
+    this.decayStatuses("player");
     this.reapTheDead();
     discardHand(this.state);
     this.state.phase = "enemy_turn";
@@ -321,15 +422,21 @@ export class CombatController {
     if (this.state.phase !== "enemy_turn") return;
     this.events.emit("turnStart", { side: "enemy", turn: this.state.turn });
 
-    // Start-of-turn ticks for enemies
-    this.tickStatuses("enemy");
+    // Start-of-turn damage-over-time ticks for enemies (but not decay).
+    this.tickDotsAndHazard("enemy");
+    this.reapTheDead();
+    if (this.checkVictory()) return;
 
     // Resolve telegraphs (e.g., delayed bombs)
     this.resolveTelegraphs();
+    this.reapTheDead();
+    if (this.checkVictory()) return;
 
     for (const id of this.state.enemyOrder) {
       const enemy = this.state.units.get(id);
       if (!enemy || enemy.dead) continue;
+      // Stun check happens BEFORE decay so a stun applied last turn still
+      // prevents this turn's action.
       if ((enemy.statuses["stun"] ?? 0) > 0) {
         this.state.log.push({ ts: Date.now(), kind: "intent", text: `${enemy.name} is stunned.` });
         continue;
@@ -340,8 +447,10 @@ export class CombatController {
       if (this.checkVictory()) return;
     }
 
-    // End of enemy turn: tick player statuses, start next player turn
-    this.tickStatuses("player");
+    // Decay enemy-owned statuses at the end of the enemy's turn.
+    this.decayStatuses("enemy");
+    // Start-of-turn DoTs for the player side (happen at their new turn).
+    this.tickDotsAndHazard("player");
     this.reapTheDead();
     if (this.checkVictory()) return;
 
@@ -353,12 +462,14 @@ export class CombatController {
     this.state.player.cardsPlayedThisTurn = 0;
     this.state.player.movedHeroesThisTurn.clear();
     this.firstCardDiscountAvailable = this.state.player.relics.includes("first_move");
+    // Energy-tile start-of-turn grants.
+    this.grantEnergyTileBonuses();
     // Start-of-turn relics
     let drawCount = this.state.player.startingHandSize;
     for (const id of this.state.player.relics) {
       if (id === "drawExtra") drawCount += 1; // legacy alias, not used
     }
-    drawCards(this.state, drawCount, this.rng, this.state.player.handLimit);
+    this.drawCardsWithSideEffects(drawCount);
     this.regenerateIntents();
     this.events.emit("turnStart", { side: "player", turn: this.state.turn });
     this.events.emit("stateChanged", { reason: "player_turn_start" });
@@ -373,8 +484,11 @@ export class CombatController {
         // Move to best position, then hit.
         const target = this.state.units.get(act.targetId);
         if (!target) return;
-        this.moveEnemyToward(enemy, target.pos, 1);
-        if (manhattan(enemy.pos, target.pos) <= 1) {
+        // Ranged enemies move to their attack range; melee to 1.
+        const desiredRange = Math.max(1, enemy.attackRange ?? 1);
+        this.moveEnemyToward(enemy, target.pos, desiredRange);
+        const distance = manhattan(enemy.pos, target.pos);
+        if (distance <= (enemy.attackRange ?? 1)) {
           const dmg = enemy.attackDamage ?? 3;
           const res = applyDamage(enemy, target, dmg, this.state);
           this.logAttack(enemy, target, res.hpDamage + res.shieldAbsorbed);
@@ -382,14 +496,6 @@ export class CombatController {
           if (res.retaliate > 0) {
             const r = applyDamage(target, enemy, res.retaliate, this.state);
             this.logAttack(target, enemy, r.hpDamage + r.shieldAbsorbed, " (Retaliate)");
-          }
-        } else {
-          // Ranged attack still fires if within attackRange
-          if (enemy.attackRange && manhattan(enemy.pos, target.pos) <= enemy.attackRange) {
-            const dmg = enemy.attackDamage ?? 3;
-            const res = applyDamage(enemy, target, dmg, this.state);
-            this.logAttack(enemy, target, res.hpDamage + res.shieldAbsorbed);
-            this.events.emit("damageDealt", { attackerId: enemy.id, defenderId: target.id, amount: res.hpDamage + res.shieldAbsorbed });
           }
         }
         return;
@@ -489,36 +595,58 @@ export class CombatController {
     this.state.telegraphs = remaining;
   }
 
-  private tickStatuses(side: "player" | "enemy"): void {
+  /**
+   * Apply start-of-turn damage-over-time effects (poison, burn, regen) and
+   * environmental hazards for all units of the given side. Does NOT decay
+   * generic statuses — decay is performed separately at end of that side's
+   * turn by {@link decayStatuses}.
+   */
+  private tickDotsAndHazard(side: "player" | "enemy"): void {
     for (const u of getAllUnits(this.state, side)) {
-      // Poison ticks
+      if (u.dead) continue;
       const poison = u.statuses["poison"] ?? 0;
       if (poison > 0) {
         const res = applyDamage(undefined, u, poison, this.state);
         this.logAttack(undefined, u, res.hpDamage + res.shieldAbsorbed, " (Poison)");
+        // Poison decays per tick on the affected unit's own turn.
         u.statuses["poison"] = Math.max(0, poison - 1);
+        if (u.statuses["poison"] <= 0) delete u.statuses["poison"];
       }
       const burn = u.statuses["burn"] ?? 0;
       if (burn > 0) {
-        const res = applyDamage(undefined, u, Balance.statuses.burnPerTurnDamage, this.state);
+        const burnDmg = Balance.statuses.burnPerTurnDamage * burn;
+        const res = applyDamage(undefined, u, burnDmg, this.state);
         this.logAttack(undefined, u, res.hpDamage + res.shieldAbsorbed, " (Burn)");
       }
       const regen = u.statuses["regen"] ?? 0;
       if (regen > 0) {
         heal(u, regen);
         u.statuses["regen"] = Math.max(0, regen - 1);
+        if (u.statuses["regen"] <= 0) delete u.statuses["regen"];
       }
       // Hazard tile damage
       if (!u.dead && this.state.grid.getKind(u.pos) === "hazard") {
         const res = applyDamage(undefined, u, 2, this.state);
         this.logAttack(undefined, u, res.hpDamage + res.shieldAbsorbed, " (Hazard)");
       }
-      // Decay / expire
+    }
+  }
+
+  /**
+   * Decay or expire generic statuses for all units of the given side. Runs
+   * at the END of that side's turn so that a status applied at any point
+   * during a turn still takes full effect before ticking down.
+   */
+  private decayStatuses(side: "player" | "enemy"): void {
+    for (const u of getAllUnits(this.state, side)) {
       for (const [k, v] of Object.entries({ ...u.statuses })) {
         if (v <= 0) {
           delete u.statuses[k];
           continue;
         }
+        // Poison/regen are self-decayed in tickDotsAndHazard; skip here to
+        // avoid double-decay.
+        if (k === "poison" || k === "regen") continue;
         const def = getStatusDef(k);
         if (!def) continue;
         if (def.behavior === "decayEachTurn") u.statuses[k] = v - 1;
@@ -531,11 +659,14 @@ export class CombatController {
   // ── Death / victory ───────────────────────────────────────────────────────
 
   private reapTheDead(): void {
+    const emitted = this.state.player.deathEventsEmitted ?? new Set<UnitId>();
     for (const u of this.state.units.values()) {
-      if (u.dead) {
+      if (u.dead && !emitted.has(u.id)) {
+        emitted.add(u.id);
         this.events.emit("unitDied", { unitId: u.id });
       }
     }
+    this.state.player.deathEventsEmitted = emitted;
   }
 
   private checkVictory(): boolean {

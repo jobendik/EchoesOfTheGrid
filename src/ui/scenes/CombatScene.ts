@@ -62,6 +62,7 @@ export class CombatScene {
 
   dispose(): void {
     if (this.animTick !== null) cancelAnimationFrame(this.animTick);
+    document.removeEventListener("keydown", this.onKeyDown);
   }
 
   private build(): void {

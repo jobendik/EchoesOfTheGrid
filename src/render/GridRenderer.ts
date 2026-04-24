@@ -27,6 +27,11 @@ export class GridRenderer {
   tileSize = 68;
   offsetX = 0;
   offsetY = 0;
+  private lastW = 0;
+  private lastH = 0;
+  private lastDpr = 0;
+  private lastGw = 0;
+  private lastGh = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -42,12 +47,22 @@ export class GridRenderer {
     const w = parent.clientWidth;
     const h = parent.clientHeight;
     const dpr = window.devicePixelRatio || 1;
+    const gw = state.grid.width, gh = state.grid.height;
+    // Skip the (expensive) canvas resize if nothing relevant changed. This
+    // avoids trashing the backing store and transform every frame.
+    if (w === this.lastW && h === this.lastH && dpr === this.lastDpr && gw === this.lastGw && gh === this.lastGh) {
+      return;
+    }
+    this.lastW = w;
+    this.lastH = h;
+    this.lastDpr = dpr;
+    this.lastGw = gw;
+    this.lastGh = gh;
     this.canvas.width = w * dpr;
     this.canvas.height = h * dpr;
     this.canvas.style.width = `${w}px`;
     this.canvas.style.height = `${h}px`;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const gw = state.grid.width, gh = state.grid.height;
     const ts = Math.floor(Math.min((w - 40) / gw, (h - 40) / gh));
     this.tileSize = Math.max(36, ts);
     this.offsetX = Math.floor((w - this.tileSize * gw) / 2);

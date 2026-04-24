@@ -1,5 +1,5 @@
 /** Save data schema version. Bump whenever SaveState shape changes. */
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 /** Storage key used for localStorage persistence. */
 export const SAVE_KEY = "eotg.save.v1";

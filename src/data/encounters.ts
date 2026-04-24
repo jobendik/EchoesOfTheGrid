@@ -175,6 +175,72 @@ export const ENCOUNTERS: readonly EncounterDefinition[] = [
     spawns: [],
     description: "Upgrade one card in your deck.",
   },
+  {
+    id: "enc_shop",
+    name: "Scrap Market",
+    kind: "shop",
+    tier: 1,
+    gridWidth: 0,
+    gridHeight: 0,
+    spawns: [],
+    description: "Trade scrap for cards, relics, or deck refinement.",
+  },
+  {
+    id: "enc_hazard_corridor",
+    name: "Hazard Corridor",
+    kind: "combat",
+    tier: 2,
+    gridWidth: 10,
+    gridHeight: 6,
+    spawns: [
+      { kind: "brute", x: 8, y: 2 },
+      { kind: "brute", x: 8, y: 3 },
+      { kind: "drone", x: 9, y: 0 },
+      { kind: "drone", x: 9, y: 5 },
+    ],
+    terrain: [
+      { kind: "hazard", tiles: [{ x: 4, y: 1 }, { x: 4, y: 2 }, { x: 4, y: 3 }, { x: 4, y: 4 }] },
+      { kind: "cover", tiles: [{ x: 3, y: 0 }, { x: 3, y: 5 }] },
+    ],
+    description: "Narrow chokepoint laced with hazards — push enemies into them.",
+  },
+  {
+    id: "enc_energy_vault",
+    name: "Energy Vault",
+    kind: "combat",
+    tier: 2,
+    gridWidth: 8,
+    gridHeight: 6,
+    spawns: [
+      { kind: "sniper", x: 7, y: 1 },
+      { kind: "sniper", x: 7, y: 4 },
+      { kind: "shieldbearer", x: 5, y: 2 },
+      { kind: "drone", x: 5, y: 3 },
+    ],
+    terrain: [
+      { kind: "energy", tiles: [{ x: 2, y: 2 }, { x: 2, y: 3 }, { x: 3, y: 1 }, { x: 3, y: 4 }] },
+    ],
+    description: "Energy nodes to exploit — but snipers defend them.",
+  },
+  {
+    id: "enc_signal_beacon",
+    name: "Signal Beacon",
+    kind: "combat",
+    tier: 2,
+    gridWidth: 9,
+    gridHeight: 6,
+    spawns: [
+      { kind: "brute", x: 8, y: 2 },
+      { kind: "drone", x: 7, y: 0 },
+      { kind: "drone", x: 7, y: 5 },
+      { kind: "sniper", x: 8, y: 4 },
+    ],
+    terrain: [
+      { kind: "objective", tiles: [{ x: 4, y: 2 }, { x: 4, y: 3 }] },
+      { kind: "cover", tiles: [{ x: 3, y: 1 }, { x: 3, y: 4 }] },
+    ],
+    description: "Hold the beacons — each turn on one grants +2 Shield.",
+  },
 ];
 
 export const ENCOUNTER_MAP = new Map(ENCOUNTERS.map((e) => [e.id, e]));

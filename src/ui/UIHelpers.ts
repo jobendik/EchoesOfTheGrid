@@ -48,32 +48,57 @@ export function clear(root: HTMLElement): void {
   while (root.firstChild) root.removeChild(root.firstChild);
 }
 
+/**
+ * Shared singleton tooltip element. Using a single element prevents orphaned
+ * tooltips when a hovered target is removed from the DOM (e.g. when the hand
+ * is rebuilt while a card is under the cursor) — a situation where the
+ * target's `mouseleave` never fires.
+ */
+let sharedTooltipEl: HTMLDivElement | null = null;
+let sharedTooltipOwner: HTMLElement | null = null;
+
+function getSharedTooltip(): HTMLDivElement {
+  if (!sharedTooltipEl) {
+    sharedTooltipEl = document.createElement("div");
+    sharedTooltipEl.className = "tooltip";
+    sharedTooltipEl.style.display = "none";
+    document.body.appendChild(sharedTooltipEl);
+  }
+  return sharedTooltipEl;
+}
+
+function hideSharedTooltip(owner: HTMLElement | null): void {
+  // Only hide if the requesting owner currently owns the tooltip; this avoids
+  // flicker when pointer moves rapidly between adjacent targets.
+  if (sharedTooltipEl && (owner === null || sharedTooltipOwner === owner)) {
+    sharedTooltipEl.style.display = "none";
+    sharedTooltipEl.innerHTML = "";
+    sharedTooltipOwner = null;
+  }
+}
+
 /** Simple tooltip attached to an element; follows the mouse. */
 export function attachTooltip(target: HTMLElement, getContent: () => string | HTMLElement | null): () => void {
-  let tip: HTMLDivElement | null = null;
   const show = (ev: MouseEvent): void => {
     const content = getContent();
     if (!content) return;
-    if (!tip) {
-      tip = document.createElement("div");
-      tip.className = "tooltip";
-      document.body.appendChild(tip);
-    }
+    const tip = getSharedTooltip();
     tip.innerHTML = "";
     if (typeof content === "string") tip.innerHTML = content;
     else tip.appendChild(content);
+    tip.style.display = "";
+    sharedTooltipOwner = target;
     move(ev);
   };
   const move = (ev: MouseEvent): void => {
-    if (!tip) return;
+    if (!sharedTooltipEl || sharedTooltipOwner !== target) return;
     const x = ev.clientX + 16;
     const y = ev.clientY + 16;
-    tip.style.left = `${Math.min(x, window.innerWidth - 260)}px`;
-    tip.style.top = `${Math.min(y, window.innerHeight - 140)}px`;
+    sharedTooltipEl.style.left = `${Math.min(x, window.innerWidth - 260)}px`;
+    sharedTooltipEl.style.top = `${Math.min(y, window.innerHeight - 140)}px`;
   };
   const hide = (): void => {
-    if (tip && tip.parentElement) tip.parentElement.removeChild(tip);
-    tip = null;
+    hideSharedTooltip(target);
   };
   target.addEventListener("mouseenter", show);
   target.addEventListener("mousemove", move);

@@ -52,6 +52,10 @@ export interface PlayerState {
   attacksThisTurn: number;
   cardsPlayedThisTurn: number;
   preventLethalCharges: number;
+  /** True while resolving a zero-cost card (used by scrap_multiplier). */
+  zeroCostCardActive?: boolean;
+  /** Unit ids whose death has already been broadcast via unitDied. */
+  deathEventsEmitted?: Set<UnitId>;
 }
 
 export type CombatPhase =

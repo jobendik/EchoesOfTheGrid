@@ -6,16 +6,22 @@ import type { Unit } from "./UnitTypes.js";
 
 /** Factory helpers for spawning heroes and enemies at runtime. */
 
-export function createHero(heroClass: "vanguard" | "riftblade" | "signalist", pos: GridPos): Unit {
+export function createHero(
+  heroClass: "vanguard" | "riftblade" | "signalist",
+  pos: GridPos,
+  hpOverride?: { hp?: number; maxHp?: number },
+): Unit {
   const bp = HERO_MAP.get(heroClass);
   if (!bp) throw new Error(`Unknown hero class: ${heroClass}`);
+  const maxHp = hpOverride?.maxHp ?? bp.maxHp;
+  const hp = Math.max(1, Math.min(maxHp, hpOverride?.hp ?? maxHp));
   return {
     id: makeId("hero"),
     side: "player",
     name: bp.name,
     heroClass,
-    maxHp: bp.maxHp,
-    hp: bp.maxHp,
+    maxHp,
+    hp,
     pos,
     statuses: {},
     dead: false,

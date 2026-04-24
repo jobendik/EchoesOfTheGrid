@@ -23,6 +23,7 @@ import { CombatScene } from "./scenes/CombatScene.js";
 import { renderRewardScene } from "./scenes/RewardScene.js";
 import { renderEventScene } from "./scenes/EventScene.js";
 import { renderForgeScene, renderRestScene } from "./scenes/RestScene.js";
+import { renderShopScene, renderShopRemovalScene, type ShopStock } from "./scenes/ShopScene.js";
 import type { CardDefinition } from "../game/cards/CardTypes.js";
 import type { RelicDefinition } from "../game/relics/RelicTypes.js";
 
@@ -40,11 +41,14 @@ export class GameApp {
   private currentScene: { root: HTMLElement; dispose?: () => void } | null = null;
   private combatScene: CombatScene | null = null;
   private pendingReward: { cards: CardDefinition[]; gold: number; relic?: RelicDefinition } | null = null;
+  /** Current shop stock for the node being visited. Cleared on leaving. */
+  private shopStock: ShopStock | null = null;
 
   constructor(root: HTMLElement) {
     this.root = root;
     this.settings = loadSettings();
     audio.setVolume(this.settings.masterVolume);
+    audio.setSfxVolume(this.settings.sfxVolume);
     audio.setMuted(this.settings.muted);
     this.rng = new RNG(Date.now());
     this.render(renderMainMenu(this, this.randomSeedLabel()));
@@ -106,6 +110,17 @@ export class GameApp {
       completedNodeIds: [],
       flags: {},
       rngState: this.rng.snapshot(),
+      stats: {
+        enemiesDefeated: 0,
+        damageDealt: 0,
+        damageTaken: 0,
+        goldEarned: 0,
+        cardsAdded: 0,
+        cardsRemoved: 0,
+        cardsUpgraded: 0,
+        relicsCollected: 0,
+        turnsTaken: 0,
+      },
     };
     saveRun(this.run);
     this.showMap();
@@ -116,6 +131,17 @@ export class GameApp {
     if (!loaded) return;
     this.run = loaded;
     this.rng = new RNG(loaded.rngState);
+    // Restore any in-flight reward screen from the save.
+    if (loaded.pendingReward) {
+      const pr = loaded.pendingReward;
+      const cards = pr.cardIds
+        .map((id) => CARDS.find((c) => c.id === id))
+        .filter((c): c is CardDefinition => !!c);
+      const relic = pr.relicId ? RELICS.find((r) => r.id === pr.relicId) : undefined;
+      this.pendingReward = { cards, gold: pr.gold, relic };
+      this.render(renderRewardScene(this, cards, pr.gold, relic));
+      return;
+    }
     this.showMap();
   }
 
@@ -172,6 +198,10 @@ export class GameApp {
       this.render(renderEventScene(this, ev));
       return;
     }
+    if (node.kind === "shop") {
+      this.openShop();
+      return;
+    }
     // Combat / elite / boss
     this.startCombatForNode(node);
   }
@@ -190,6 +220,8 @@ export class GameApp {
         heroClass: h.heroClass,
         startingDeck: h.deck,
         upgraded: h.upgraded,
+        hp: h.hp,
+        maxHp: h.maxHp,
       })),
       relics: this.run.relics.slice(),
       seed: this.run.seedNumber + node.layer * 100 + node.column,
@@ -212,6 +244,11 @@ export class GameApp {
     for (const hero of controller.heroes()) {
       const runHero = this.run.heroes.find((h) => h.heroClass === hero.heroClass);
       if (runHero) runHero.hp = hero.hp;
+    }
+    // Update run stats from this combat.
+    if (this.run.stats) {
+      this.run.stats.enemiesDefeated += controller.enemies().filter((e) => e.dead).length;
+      this.run.stats.turnsTaken += controller.state.turn;
     }
     // Mark node completed
     const nodeId = this.run.currentNodeId;
@@ -237,36 +274,76 @@ export class GameApp {
       relic = rollRelicReward(this.rng, this.run.relics, "common");
     }
     this.run.gold += gold;
+    if (this.run.stats) this.run.stats.goldEarned += gold;
     this.pendingReward = { cards, gold, relic };
+    // Persist pending reward on the run so it survives a save/exit during
+    // the reward screen.
+    this.run.pendingReward = {
+      cardIds: cards.map((c) => c.id),
+      gold,
+      relicId: relic?.id,
+    };
     saveRun(this.run);
     this.render(renderRewardScene(this, cards, gold, relic));
   }
 
   onCombatDefeat(): void {
+    const run = this.run;
     clearSave();
-    this.run = null;
     this.combatScene = null;
     const overlay = el("div", { class: "overlay" });
-    overlay.appendChild(el("div", { class: "panel card-large" }, [
+    const panel = el("div", { class: "panel card-large" }, [
       el("h2", { text: "Defeat" }),
       el("div", { class: "dim", text: "The Grid overwhelms your squad. Another signal is lost to the dark." }),
-      el("div", { class: "buttons" }, [
-        el("button", { class: "primary", text: "Main Menu", onClick: () => { this.closeOverlay(); this.backToMenu(); } }),
-      ]),
+    ]);
+    if (run) panel.appendChild(this.buildRunSummary(run));
+    panel.appendChild(el("div", { class: "buttons" }, [
+      el("button", { class: "primary", text: "Main Menu", onClick: () => { this.run = null; this.closeOverlay(); this.backToMenu(); } }),
     ]));
+    overlay.appendChild(panel);
     this.showOverlay(overlay);
   }
 
   private showVictoryScreen(): void {
+    const run = this.run;
     const overlay = el("div", { class: "overlay" });
-    overlay.appendChild(el("div", { class: "panel card-large" }, [
+    const panel = el("div", { class: "panel card-large" }, [
       el("h2", { text: "Run Complete" }),
       el("div", { class: "dim", text: "The Cipher collapses. The grid hums with silence. A clean signal, at last." }),
-      el("div", { class: "buttons" }, [
-        el("button", { class: "primary", text: "Main Menu", onClick: () => { clearSave(); this.run = null; this.closeOverlay(); this.backToMenu(); } }),
-      ]),
+    ]);
+    if (run) panel.appendChild(this.buildRunSummary(run));
+    panel.appendChild(el("div", { class: "buttons" }, [
+      el("button", { class: "primary", text: "Main Menu", onClick: () => { clearSave(); this.run = null; this.closeOverlay(); this.backToMenu(); } }),
     ]));
+    overlay.appendChild(panel);
     this.showOverlay(overlay);
+  }
+
+  private buildRunSummary(run: RunState): HTMLElement {
+    const s = run.stats;
+    const nodesCleared = run.completedNodeIds.length;
+    const row = (label: string, value: string | number) =>
+      el("div", { class: "summary-row" }, [
+        el("span", { class: "summary-label dim", text: label }),
+        el("span", { class: "summary-value", text: String(value) }),
+      ]);
+    const rows = [
+      row("Seed", run.seed),
+      row("Nodes cleared", nodesCleared),
+      row("Relics collected", run.relics.length),
+      row("Gold on hand", run.gold),
+    ];
+    if (s) {
+      rows.push(
+        row("Enemies defeated", s.enemiesDefeated),
+        row("Gold earned", s.goldEarned),
+        row("Cards added", s.cardsAdded),
+        row("Cards upgraded", s.cardsUpgraded),
+        row("Cards removed", s.cardsRemoved),
+        row("Turns taken", s.turnsTaken),
+      );
+    }
+    return el("div", { class: "run-summary" }, rows);
   }
 
   // ── Rewards ────────────────────────────────────────────────────────────
@@ -274,29 +351,37 @@ export class GameApp {
   acceptCard(defId: string): void {
     if (!this.run) return;
     this.run.heroes[0].deck.push(defId);
+    if (this.run.stats) this.run.stats.cardsAdded += 1;
     this.run.rngState = this.rng.snapshot();
-    saveRun(this.run);
     this.pendingReward = null;
+    this.run.pendingReward = null;
+    saveRun(this.run);
     this.showMap();
   }
 
   acceptRelic(id: string): void {
     if (!this.run) return;
-    if (!this.run.relics.includes(id)) this.run.relics.push(id);
+    const wasNew = !this.run.relics.includes(id);
+    if (wasNew) this.run.relics.push(id);
+    if (wasNew && this.run.stats) this.run.stats.relicsCollected += 1;
     if (this.pendingReward) this.pendingReward.relic = undefined;
+    if (this.run.pendingReward) this.run.pendingReward.relicId = undefined;
     if (this.pendingReward?.cards.length) {
       // Keep the reward scene up without the relic
+      saveRun(this.run);
       this.render(renderRewardScene(this, this.pendingReward.cards, this.pendingReward.gold, undefined));
       return;
     }
+    this.run.pendingReward = null;
     saveRun(this.run);
     this.showMap();
   }
 
   skipRewards(): void {
     if (!this.run) return;
-    saveRun(this.run);
     this.pendingReward = null;
+    this.run.pendingReward = null;
+    saveRun(this.run);
     this.showMap();
   }
 
@@ -305,8 +390,18 @@ export class GameApp {
   resolveEvent(outcomes: EventOutcome[]): void {
     if (!this.run) return;
     for (const o of outcomes) this.applyEventOutcome(o);
+    this.markCurrentNodeCompleted();
     saveRun(this.run);
     this.showMap();
+  }
+
+  private markCurrentNodeCompleted(): void {
+    if (!this.run) return;
+    const nodeId = this.run.currentNodeId;
+    if (!nodeId) return;
+    const node = this.run.map.find((n) => n.id === nodeId);
+    if (node) node.completed = true;
+    if (!this.run.completedNodeIds.includes(nodeId)) this.run.completedNodeIds.push(nodeId);
   }
 
   private applyEventOutcome(o: EventOutcome): void {
@@ -374,11 +469,13 @@ export class GameApp {
     if (!this.run) return;
     if (choice === "heal") {
       for (const h of this.run.heroes) h.hp = Math.min(h.maxHp, h.hp + Math.round(h.maxHp * Balance.combat.restHealFraction));
+      this.markCurrentNodeCompleted();
       saveRun(this.run);
       this.showMap();
     } else if (choice === "upgrade") {
       this.render(renderForgeScene(this, this.run.heroes));
     } else {
+      this.markCurrentNodeCompleted();
       saveRun(this.run);
       this.showMap();
     }
@@ -392,6 +489,117 @@ export class GameApp {
     const def = getCardDef(defId);
     if (def.rarity === "curse") return;
     hero.upgraded.push(defId);
+    if (this.run.stats) this.run.stats.cardsUpgraded += 1;
+    this.markCurrentNodeCompleted();
+    saveRun(this.run);
+    this.showMap();
+  }
+
+  // ── Shop ────────────────────────────────────────────────────────────────
+
+  private openShop(): void {
+    if (!this.run) return;
+    // Build stock if this is the first visit to this shop node in this session.
+    if (!this.shopStock) {
+      const node = this.run.map.find((n) => n.id === this.run!.currentNodeId);
+      const tier: 1 | 2 | 3 = node?.layer != null && node.layer < 2 ? 1 : node?.layer != null && node.layer < 4 ? 2 : 3;
+      const cardDefs = rollCardReward(this.rng, { count: 4, tier });
+      const cards = cardDefs.map((def) => ({
+        def,
+        price: priceForCard(def.rarity, tier, this.rng),
+        bought: false,
+      }));
+      const relicDef = rollRelicReward(this.rng, this.run.relics, tier >= 3 ? "rare" : "uncommon");
+      const relic = relicDef
+        ? { def: relicDef, price: priceForRelic(relicDef.rarity, this.rng), bought: false }
+        : null;
+      this.shopStock = {
+        cards,
+        relic,
+        removalPrice: 50 + 10 * (node?.layer ?? 0),
+        removalUsed: false,
+        healPrice: 30,
+        healUsed: false,
+      };
+    }
+    this.render(renderShopScene(this, this.shopStock, this.run.heroes, this.run.gold));
+  }
+
+  private rerenderShop(): void {
+    if (!this.run || !this.shopStock) return;
+    this.render(renderShopScene(this, this.shopStock, this.run.heroes, this.run.gold));
+  }
+
+  buyShopCard(index: number): void {
+    if (!this.run || !this.shopStock) return;
+    const entry = this.shopStock.cards[index];
+    if (!entry || entry.bought || this.run.gold < entry.price) return;
+    this.run.gold -= entry.price;
+    entry.bought = true;
+    this.run.heroes[0].deck.push(entry.def.id);
+    if (this.run.stats) this.run.stats.cardsAdded += 1;
+    saveRun(this.run);
+    this.rerenderShop();
+  }
+
+  buyShopRelic(): void {
+    if (!this.run || !this.shopStock?.relic) return;
+    const r = this.shopStock.relic;
+    if (r.bought || this.run.gold < r.price) return;
+    this.run.gold -= r.price;
+    r.bought = true;
+    const wasNew = !this.run.relics.includes(r.def.id);
+    if (wasNew) this.run.relics.push(r.def.id);
+    if (wasNew && this.run.stats) this.run.stats.relicsCollected += 1;
+    saveRun(this.run);
+    this.rerenderShop();
+  }
+
+  buyShopHeal(): void {
+    if (!this.run || !this.shopStock || this.shopStock.healUsed) return;
+    if (this.run.gold < this.shopStock.healPrice) return;
+    this.run.gold -= this.shopStock.healPrice;
+    this.shopStock.healUsed = true;
+    for (const h of this.run.heroes) {
+      h.hp = Math.min(h.maxHp, h.hp + Math.round(h.maxHp * 0.3));
+    }
+    saveRun(this.run);
+    this.rerenderShop();
+  }
+
+  openShopRemoval(): void {
+    if (!this.run || !this.shopStock || this.shopStock.removalUsed) return;
+    if (this.run.gold < this.shopStock.removalPrice) return;
+    this.render(renderShopRemovalScene(this, this.run.heroes));
+  }
+
+  cancelShopRemoval(): void {
+    this.rerenderShop();
+  }
+
+  confirmShopRemoval(heroIndex: number, cardIndex: number): void {
+    if (!this.run || !this.shopStock) return;
+    const hero = this.run.heroes[heroIndex];
+    const defId = hero.deck[cardIndex];
+    if (!defId) return;
+    const def = getCardDef(defId);
+    if (def.rarity === "starter") return;
+    this.run.gold -= this.shopStock.removalPrice;
+    this.shopStock.removalUsed = true;
+    hero.deck.splice(cardIndex, 1);
+    // Also drop one matching upgrade record if present.
+    const upIdx = hero.upgraded.indexOf(defId);
+    if (upIdx >= 0) hero.upgraded.splice(upIdx, 1);
+    if (this.run.stats) this.run.stats.cardsRemoved += 1;
+    saveRun(this.run);
+    this.rerenderShop();
+  }
+
+  leaveShop(): void {
+    if (!this.run) return;
+    this.markCurrentNodeCompleted();
+    this.shopStock = null;
+    this.run.rngState = this.rng.snapshot();
     saveRun(this.run);
     this.showMap();
   }
@@ -419,6 +627,24 @@ function hashSeed(s: string): number {
     h = Math.imul(h, 16777619);
   }
   return h >>> 0;
+}
+
+function priceForCard(rarity: string, tier: 1 | 2 | 3, rng: RNG): number {
+  const base =
+    rarity === "rare" ? 90 :
+    rarity === "uncommon" ? 55 :
+    35;
+  const jitter = rng.int(-5, 10);
+  const tierBump = (tier - 1) * 10;
+  return Math.max(20, base + jitter + tierBump);
+}
+
+function priceForRelic(rarity: string, rng: RNG): number {
+  const base =
+    rarity === "rare" ? 180 :
+    rarity === "uncommon" ? 120 :
+    80;
+  return base + rng.int(-10, 20);
 }
 
 // Prevent unused warning on RELICS import; used for typing indirectly.

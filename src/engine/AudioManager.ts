@@ -39,6 +39,7 @@ export class AudioManager {
   private master: GainNode | null = null;
   private muted = false;
   private volume = 0.8;
+  private sfxVolume = 1;
 
   constructor() {
     // Defer creation until first user gesture (browser autoplay policy).
@@ -72,6 +73,10 @@ export class AudioManager {
     if (this.master && !this.muted) this.master.gain.value = this.volume;
   }
 
+  setSfxVolume(v: number): void {
+    this.sfxVolume = Math.max(0, Math.min(1, v));
+  }
+
   /**
    * Play an audio asset by key. Key can be "audio.cardPlay" or just
    * "cardPlay". If the asset isn't mapped to a preset, nothing plays.
@@ -92,7 +97,7 @@ export class AudioManager {
       osc.frequency.exponentialRampToValueAtTime(Math.max(20, preset.rampTo), t0 + preset.duration);
     }
     gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(preset.gain, t0 + 0.01);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, preset.gain * this.sfxVolume), t0 + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + preset.duration);
     osc.connect(gain);
     gain.connect(this.master);

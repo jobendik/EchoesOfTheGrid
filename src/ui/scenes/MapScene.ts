@@ -14,17 +14,34 @@ export class MapScene {
   private ctx!: CanvasRenderingContext2D;
   private run: RunState;
   private hoverId: string | null = null;
+  private resizeObserver: ResizeObserver | null = null;
 
   constructor(readonly app: GameApp, run: RunState) {
     this.run = run;
     this.root = el("div", { class: "scene map-scene" });
     this.build();
     window.addEventListener("resize", this.onResize);
+    // The canvas's flex parent can resize after mount (fadeIn animation,
+    // font loading, scrollbars settling). A ResizeObserver guarantees we
+    // redraw exactly when that happens instead of needing a polling rAF
+    // loop. We still kick off an initial draw via rAF in case the observer
+    // doesn't fire on the first layout pass.
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver(() => this.draw());
+      // Observe the wrap element (canvas's parent) so we react to the
+      // actual container size, not the canvas's self-reported size.
+      const parent = this.canvas.parentElement;
+      if (parent) this.resizeObserver.observe(parent);
+    }
     requestAnimationFrame(() => this.draw());
   }
 
   dispose(): void {
     window.removeEventListener("resize", this.onResize);
+    if (this.resizeObserver) {
+      this.resizeObserver.disconnect();
+      this.resizeObserver = null;
+    }
   }
 
   private onResize = (): void => this.draw();
@@ -72,6 +89,7 @@ export class MapScene {
       { kind: "event", color: "#7be8a0", label: "Event" },
       { kind: "rest", color: "#ffe066", label: "Rest" },
       { kind: "upgrade", color: "#ff9a3c", label: "Forge" },
+      { kind: "shop", color: "#9be8ff", label: "Shop" },
       { kind: "boss", color: "#ff5c5c", label: "Boss" },
     ];
     return el("div", { class: "map-legend" }, rows.map((r) =>
@@ -87,10 +105,16 @@ export class MapScene {
     const parent = this.canvas.parentElement!;
     const w = parent.clientWidth;
     const h = parent.clientHeight;
-    this.canvas.width = w * dpr;
-    this.canvas.height = h * dpr;
-    this.canvas.style.width = `${w}px`;
-    this.canvas.style.height = `${h}px`;
+    // Only re-size the backing store when dimensions actually change. This
+    // avoids clearing the canvas on every hover redraw.
+    const targetW = Math.max(1, Math.floor(w * dpr));
+    const targetH = Math.max(1, Math.floor(h * dpr));
+    if (this.canvas.width !== targetW || this.canvas.height !== targetH) {
+      this.canvas.width = targetW;
+      this.canvas.height = targetH;
+      this.canvas.style.width = `${w}px`;
+      this.canvas.style.height = `${h}px`;
+    }
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const layers = Math.max(...this.run.map.map((n) => n.layer)) + 1;
@@ -183,8 +207,6 @@ export class MapScene {
         ctx.fillText(label, x, y - r - labelH / 2 - 8);
       }
     }
-
-    requestAnimationFrame(() => this.draw());
   }
 
   private isReachable(node: MapNode): boolean {
@@ -218,6 +240,7 @@ export class MapScene {
     }
     if (hover !== this.hoverId) {
       this.hoverId = hover;
+      this.draw();
     }
   }
 

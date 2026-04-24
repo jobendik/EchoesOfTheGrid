@@ -67,8 +67,11 @@ export type CardEffectDefinition =
   | { kind: "shield"; amount: number }
   | { kind: "shieldAllAllies"; amount: number }
   | { kind: "applyStatus"; status: KeywordId; stacks: number }
+  | { kind: "applyStatusSelf"; status: KeywordId; stacks: number }
+  | { kind: "applyStatusInArea"; status: KeywordId; stacks: number; side: "enemy" | "ally" }
   | { kind: "applyStatusAll"; status: KeywordId; stacks: number; side: "enemy" | "ally" }
   | { kind: "drawCards"; amount: number }
+  | { kind: "drawIfMoved"; amount: number }
   | { kind: "gainEnergy"; amount: number }
   | { kind: "exhaustSelf" }
   | { kind: "moveSelf"; distance: number }

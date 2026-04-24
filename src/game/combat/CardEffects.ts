@@ -101,6 +101,21 @@ function applyEffect(eff: CardEffectDefinition, ctx: EffectContext): void {
       for (const u of units) addStatus(state, u, eff.status, eff.stacks);
       break;
     }
+    case "applyStatusSelf": {
+      addStatus(state, caster, eff.status, eff.stacks);
+      break;
+    }
+    case "applyStatusInArea": {
+      // Apply to units actually on the computed affected tiles, respecting
+      // the card's area shape (e.g. radius/cone) and chosen side.
+      const side = eff.side === "enemy" ? "enemy" : "player";
+      const tiles = affectedTiles.length ? affectedTiles : [target];
+      const sideForQuery = side === "enemy" ? "enemy" : "ally";
+      for (const u of unitsOnTiles(state, tiles, sideForQuery)) {
+        addStatus(state, u, eff.status, eff.stacks);
+      }
+      break;
+    }
     case "applyStatusAll": {
       const side = eff.side === "enemy" ? "enemy" : "player";
       for (const u of getAllUnits(state, side)) addStatus(state, u, eff.status, eff.stacks);
@@ -111,6 +126,9 @@ function applyEffect(eff: CardEffectDefinition, ctx: EffectContext): void {
       // enqueue a log and bump a counter; the controller post-processes.
       state.player.cardsPlayedThisTurn += 0; // no-op, kept explicit
       deferredDraw(state, eff.amount);
+      break;
+    case "drawIfMoved":
+      if (ctx.casterMovedThisTurn) deferredDraw(state, eff.amount);
       break;
     case "gainEnergy":
       state.player.energy += eff.amount;
@@ -277,6 +295,23 @@ function moveUnit(state: CombatState, u: Unit, dest: GridPos): void {
   if (state.grid.getKind(dest) === "hazard") {
     const res = applyDamage(undefined, u, 3, state);
     logDamage(state, undefined, u, res.hpDamage + res.shieldAbsorbed, res.killed, " (Hazard)");
+  }
+  // Overwatch: enemies with the status that can now see/reach `u` fire a
+  // reaction shot, then lose the status.
+  if (!u.dead && u.side === "player") {
+    for (const enemy of getAllUnits(state, "enemy")) {
+      const ow = enemy.statuses["overwatch"] ?? 0;
+      if (ow <= 0 || enemy.dead) continue;
+      const range = Math.max(1, enemy.attackRange ?? 1);
+      if (manhattan(enemy.pos, u.pos) <= range) {
+        const dmg = enemy.attackDamage ?? 3;
+        const res = applyDamage(enemy, u, dmg, state);
+        logDamage(state, enemy, u, res.hpDamage + res.shieldAbsorbed, res.killed, " (Overwatch)");
+        enemy.statuses["overwatch"] = 0;
+        delete enemy.statuses["overwatch"];
+        if (u.dead) break;
+      }
+    }
   }
 }
 

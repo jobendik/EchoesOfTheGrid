@@ -24,6 +24,7 @@ export function renderSettingsOverlay(app: GameApp, settings: GameSettings): HTM
   }));
   card.appendChild(makeSlider("SFX Volume", settings.sfxVolume, (v) => {
     settings.sfxVolume = v;
+    audio.setSfxVolume(v);
     app.saveSettings(settings);
   }));
 
