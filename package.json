@@ -1,0 +1,20 @@
+{
+  "name": "echoes-of-the-grid",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A tactical roguelike deckbuilder prototype built with TypeScript + Vite. Grid combat, data-driven cards, utility-based enemy AI, and a polished placeholder-first UI.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2",
+    "vitest": "^2.0.5"
+  }
+}
