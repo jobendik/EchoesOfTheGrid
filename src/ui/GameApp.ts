@@ -1,5 +1,6 @@
 import { RNG } from "../core/RNG.js";
 import { Logger } from "../core/Logger.js";
+import { makeId } from "../core/Id.js";
 import { Balance } from "../data/balance.js";
 import { ENCOUNTER_MAP } from "../data/encounters.js";
 import { EVENTS } from "../data/events.js";
@@ -13,7 +14,7 @@ import type { EventOutcome } from "../game/encounters/EncounterTypes.js";
 import { rollCardReward, rollRelicReward } from "../game/progression/RewardSystem.js";
 import { CARDS, getCardDef } from "../data/cards.js";
 import { clearSave, loadRun, loadSettings, saveRun, saveSettings, type GameSettings } from "../game/state/SaveState.js";
-import type { MapNode, RunState } from "../game/state/RunState.js";
+import type { MapNode, RunCardInstance, RunState } from "../game/state/RunState.js";
 import { clear, el } from "./UIHelpers.js";
 import { renderMainMenu } from "./scenes/MainMenuScene.js";
 import { renderHelpOverlay } from "./scenes/HelpOverlay.js";
@@ -96,13 +97,21 @@ export class GameApp {
       heroClass: hb.heroClass,
       maxHp: hb.maxHp,
       hp: hb.maxHp,
-      deck: hb.startingDeck.slice(),
-      upgraded: [] as string[],
     }));
+    // Squad-wide starting deck — concatenate every hero's starter list into
+    // distinct instances so duplicates can later be upgraded independently.
+    const deck: RunCardInstance[] = HEROES.flatMap((hb) =>
+      hb.startingDeck.map((cardId) => ({
+        instanceId: makeId("rcard"),
+        cardId,
+        upgraded: false,
+      })),
+    );
     this.run = {
       seed,
       seedNumber,
       heroes,
+      deck,
       relics: [],
       gold: 0,
       currentNodeId: null,
@@ -190,7 +199,7 @@ export class GameApp {
       return;
     }
     if (node.kind === "upgrade") {
-      this.render(renderForgeScene(this, this.run.heroes));
+      this.render(renderForgeScene(this, this.run.deck));
       return;
     }
     if (node.kind === "event") {
@@ -218,10 +227,13 @@ export class GameApp {
       encounterId: encounter.id,
       heroes: this.run.heroes.map((h) => ({
         heroClass: h.heroClass,
-        startingDeck: h.deck,
-        upgraded: h.upgraded,
         hp: h.hp,
         maxHp: h.maxHp,
+      })),
+      deck: this.run.deck.map((c) => ({
+        instanceId: c.instanceId,
+        cardId: c.cardId,
+        upgraded: c.upgraded,
       })),
       relics: this.run.relics.slice(),
       seed: this.run.seedNumber + node.layer * 100 + node.column,
@@ -240,15 +252,19 @@ export class GameApp {
   onCombatVictory(): void {
     if (!this.run || !this.combatScene) return;
     const controller = this.combatScene.controller;
-    // Write back hero HPs to the run state
-    for (const hero of controller.heroes()) {
+    const result = controller.getResult();
+    // Write back hero HPs to the run state from the combat result snapshot.
+    // Iterating CombatResult.heroHp avoids querying the unit graph twice
+    // and keeps stat tracking honest about who survived.
+    for (const hero of result.heroHp) {
       const runHero = this.run.heroes.find((h) => h.heroClass === hero.heroClass);
       if (runHero) runHero.hp = hero.hp;
     }
-    // Update run stats from this combat.
     if (this.run.stats) {
-      this.run.stats.enemiesDefeated += controller.enemies().filter((e) => e.dead).length;
-      this.run.stats.turnsTaken += controller.state.turn;
+      this.run.stats.enemiesDefeated += result.enemiesDefeated;
+      this.run.stats.damageDealt += result.damageDealt;
+      this.run.stats.damageTaken += result.damageTaken;
+      this.run.stats.turnsTaken += result.turnsTaken;
     }
     // Mark node completed
     const nodeId = this.run.currentNodeId;
@@ -350,7 +366,7 @@ export class GameApp {
 
   acceptCard(defId: string): void {
     if (!this.run) return;
-    this.run.heroes[0].deck.push(defId);
+    this.run.deck.push({ instanceId: makeId("rcard"), cardId: defId, upgraded: false });
     if (this.run.stats) this.run.stats.cardsAdded += 1;
     this.run.rngState = this.rng.snapshot();
     this.pendingReward = null;
@@ -419,13 +435,12 @@ export class GameApp {
       case "addRandomCard": {
         const pool = CARDS.filter((c) => c.rarity === o.rarity);
         const pick = this.rng.pick(pool);
-        if (pick) this.run.heroes[0].deck.push(pick.id);
+        if (pick) this.run.deck.push({ instanceId: makeId("rcard"), cardId: pick.id, upgraded: false });
         break;
       }
       case "addCurse": {
-        // Add the curse to the first hero's deck.
         const curse = this.rng.pick(CARDS.filter((c) => c.rarity === "curse"));
-        if (curse) this.run.heroes[0].deck.push(curse.id);
+        if (curse) this.run.deck.push({ instanceId: makeId("rcard"), cardId: curse.id, upgraded: false });
         break;
       }
       case "addRelic": {
@@ -434,26 +449,23 @@ export class GameApp {
         break;
       }
       case "removeCard": {
-        // Remove the last non-starter card from hero 0
-        const h = this.run.heroes[0];
-        for (let i = h.deck.length - 1; i >= 0; i--) {
-          if (getCardDef(h.deck[i]).rarity !== "starter") {
-            h.deck.splice(i, 1);
+        // Remove the last non-starter card instance.
+        for (let i = this.run.deck.length - 1; i >= 0; i--) {
+          if (getCardDef(this.run.deck[i].cardId).rarity !== "starter") {
+            this.run.deck.splice(i, 1);
             break;
           }
         }
         break;
       }
       case "upgradeCard": {
-        const h = this.run.heroes[0];
-        for (let i = 0; i < h.deck.length; i++) {
-          const defId = h.deck[i];
-          const def = getCardDef(defId);
+        // Upgrade the first non-curse, non-already-upgraded instance.
+        for (const inst of this.run.deck) {
+          if (inst.upgraded) continue;
+          const def = getCardDef(inst.cardId);
           if (def.rarity === "curse") continue;
-          const countUpgraded = h.upgraded.filter((x) => x === defId).length;
-          const countTotal = h.deck.filter((x) => x === defId).length;
-          if (countUpgraded < countTotal && (def.upgradedDescription || def.upgradedEffects || def.upgradedCost !== undefined)) {
-            h.upgraded.push(defId);
+          if (def.upgradedDescription || def.upgradedEffects || def.upgradedCost !== undefined) {
+            inst.upgraded = true;
             break;
           }
         }
@@ -473,7 +485,7 @@ export class GameApp {
       saveRun(this.run);
       this.showMap();
     } else if (choice === "upgrade") {
-      this.render(renderForgeScene(this, this.run.heroes));
+      this.render(renderForgeScene(this, this.run.deck));
     } else {
       this.markCurrentNodeCompleted();
       saveRun(this.run);
@@ -481,14 +493,18 @@ export class GameApp {
     }
   }
 
-  upgradeCardInDeck(heroIndex: number, cardIndex: number): void {
+  /**
+   * Upgrade a single card instance in the squad deck. Identified by
+   * `instanceId` so picking one Strike to upgrade no longer upgrades every
+   * Strike copy.
+   */
+  upgradeCardInstance(instanceId: string): void {
     if (!this.run) return;
-    const hero = this.run.heroes[heroIndex];
-    const defId = hero.deck[cardIndex];
-    if (!defId) return;
-    const def = getCardDef(defId);
-    if (def.rarity === "curse") return;
-    hero.upgraded.push(defId);
+    const inst = this.run.deck.find((c) => c.instanceId === instanceId);
+    if (!inst) return;
+    const def = getCardDef(inst.cardId);
+    if (def.rarity === "curse" || inst.upgraded) return;
+    inst.upgraded = true;
     if (this.run.stats) this.run.stats.cardsUpgraded += 1;
     this.markCurrentNodeCompleted();
     saveRun(this.run);
@@ -522,12 +538,12 @@ export class GameApp {
         healUsed: false,
       };
     }
-    this.render(renderShopScene(this, this.shopStock, this.run.heroes, this.run.gold));
+    this.render(renderShopScene(this, this.shopStock, this.run.heroes, this.run.deck, this.run.gold));
   }
 
   private rerenderShop(): void {
     if (!this.run || !this.shopStock) return;
-    this.render(renderShopScene(this, this.shopStock, this.run.heroes, this.run.gold));
+    this.render(renderShopScene(this, this.shopStock, this.run.heroes, this.run.deck, this.run.gold));
   }
 
   buyShopCard(index: number): void {
@@ -536,7 +552,7 @@ export class GameApp {
     if (!entry || entry.bought || this.run.gold < entry.price) return;
     this.run.gold -= entry.price;
     entry.bought = true;
-    this.run.heroes[0].deck.push(entry.def.id);
+    this.run.deck.push({ instanceId: makeId("rcard"), cardId: entry.def.id, upgraded: false });
     if (this.run.stats) this.run.stats.cardsAdded += 1;
     saveRun(this.run);
     this.rerenderShop();
@@ -570,26 +586,23 @@ export class GameApp {
   openShopRemoval(): void {
     if (!this.run || !this.shopStock || this.shopStock.removalUsed) return;
     if (this.run.gold < this.shopStock.removalPrice) return;
-    this.render(renderShopRemovalScene(this, this.run.heroes));
+    this.render(renderShopRemovalScene(this, this.run.deck));
   }
 
   cancelShopRemoval(): void {
     this.rerenderShop();
   }
 
-  confirmShopRemoval(heroIndex: number, cardIndex: number): void {
+  confirmShopRemoval(instanceId: string): void {
     if (!this.run || !this.shopStock) return;
-    const hero = this.run.heroes[heroIndex];
-    const defId = hero.deck[cardIndex];
-    if (!defId) return;
-    const def = getCardDef(defId);
+    const idx = this.run.deck.findIndex((c) => c.instanceId === instanceId);
+    if (idx < 0) return;
+    const inst = this.run.deck[idx];
+    const def = getCardDef(inst.cardId);
     if (def.rarity === "starter") return;
     this.run.gold -= this.shopStock.removalPrice;
     this.shopStock.removalUsed = true;
-    hero.deck.splice(cardIndex, 1);
-    // Also drop one matching upgrade record if present.
-    const upIdx = hero.upgraded.indexOf(defId);
-    if (upIdx >= 0) hero.upgraded.splice(upIdx, 1);
+    this.run.deck.splice(idx, 1);
     if (this.run.stats) this.run.stats.cardsRemoved += 1;
     saveRun(this.run);
     this.rerenderShop();

@@ -1,6 +1,8 @@
 import { SAVE_KEY, SAVE_VERSION, SETTINGS_KEY } from "../../core/SaveVersion.js";
 import { Logger } from "../../core/Logger.js";
-import type { RunState, SerializedRun } from "./RunState.js";
+import { makeId } from "../../core/Id.js";
+import type { CardId } from "../../core/Types.js";
+import type { HeroRunState, RunCardInstance, RunState, SerializedRun } from "./RunState.js";
 
 /** Game-wide settings separate from a run. */
 export interface GameSettings {
@@ -45,12 +47,17 @@ export function loadRun(): RunState | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<SerializedRun>;
-    if (!parsed || parsed.version !== SAVE_VERSION) {
-      Logger.warn("Stale save version detected — ignoring.");
+    const parsed = JSON.parse(raw) as Partial<SerializedRun> & { version?: number };
+    if (!parsed) return null;
+    // Best-effort migration from older shapes. We expand support as the
+    // schema evolves; callers that fail mid-migration fall back to null
+    // so the player can start a new run rather than crash.
+    const migrated = migrateRun(parsed);
+    if (!migrated) {
+      Logger.warn(`Save version ${parsed.version} unsupported — ignoring.`);
       return null;
     }
-    return sanitizeLoadedRun(parsed as SerializedRun);
+    return sanitizeLoadedRun(migrated);
   } catch (err) {
     Logger.warn("loadRun failed", err);
     return null;
@@ -90,6 +97,7 @@ function sanitizeLoadedRun(r: SerializedRun): RunState {
     seed: r.seed ?? "",
     seedNumber: r.seedNumber ?? 0,
     heroes: r.heroes ?? [],
+    deck: r.deck ?? [],
     relics: r.relics ?? [],
     gold: r.gold ?? 0,
     currentNodeId: r.currentNodeId ?? null,
@@ -110,4 +118,39 @@ function sanitizeLoadedRun(r: SerializedRun): RunState {
       turnsTaken: 0,
     },
   };
+}
+
+/**
+ * Migrate older save payloads into the current schema. Returning `null`
+ * signals the save is too old to recover and should be discarded.
+ *
+ * The pre-v3 format kept `deck: CardId[]` and `upgraded: CardId[]` on each
+ * hero. We promote those into a squad-wide `deck: RunCardInstance[]` with
+ * fresh instance ids, picking first-occurrence-wins for upgrade flags.
+ */
+function migrateRun(parsed: Partial<SerializedRun> & { version?: number }): SerializedRun | null {
+  if (parsed.version === SAVE_VERSION) return parsed as SerializedRun;
+  if (parsed.version === 2) {
+    type LegacyHero = HeroRunState & { deck?: CardId[]; upgraded?: CardId[] };
+    const legacyHeroes = (parsed.heroes ?? []) as LegacyHero[];
+    const deck: RunCardInstance[] = [];
+    const cleanHeroes: HeroRunState[] = [];
+    for (const h of legacyHeroes) {
+      const upgradedQueue = (h.upgraded ?? []).slice();
+      for (const id of h.deck ?? []) {
+        const upIdx = upgradedQueue.indexOf(id);
+        const upgraded = upIdx >= 0;
+        if (upIdx >= 0) upgradedQueue.splice(upIdx, 1);
+        deck.push({ instanceId: makeId("rcard"), cardId: id, upgraded });
+      }
+      cleanHeroes.push({ heroClass: h.heroClass, maxHp: h.maxHp, hp: h.hp });
+    }
+    return {
+      ...(parsed as SerializedRun),
+      heroes: cleanHeroes,
+      deck,
+      version: SAVE_VERSION,
+    };
+  }
+  return null;
 }

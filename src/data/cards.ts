@@ -674,7 +674,7 @@ export const CARDS: readonly CardDefinition[] = [
     type: "tactic",
     cost: 2,
     targeting: { kind: "allEnemies", range: 0, area: { kind: "single" } },
-    effects: [{ kind: "applyStatusAll", status: "stun", stacks: 1, side: "enemy" }],
+    effects: [{ kind: "applyStatus", status: "stun", stacks: 1 }],
     tags: ["control"],
     keywords: ["stun"],
     description: "Stun all enemies below 50% HP.",

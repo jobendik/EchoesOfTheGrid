@@ -1,7 +1,7 @@
 import { audio } from "../../engine/AudioManager.js";
 import { getCardDef } from "../../data/cards.js";
 import { makeCardInstance } from "../../game/cards/DeckManager.js";
-import type { HeroRunState } from "../../game/state/RunState.js";
+import type { HeroRunState, RunCardInstance } from "../../game/state/RunState.js";
 import { renderCard } from "../CardView.js";
 import { el } from "../UIHelpers.js";
 import type { GameApp } from "../GameApp.js";
@@ -33,8 +33,11 @@ export function renderRestScene(app: GameApp, heroes: HeroRunState[]): HTMLEleme
   return scene;
 }
 
-/** Upgrade picker: shows deck, clicking a card upgrades and returns to map. */
-export function renderForgeScene(app: GameApp, heroes: HeroRunState[]): HTMLElement {
+/**
+ * Upgrade picker: shows the squad deck. Clicking an instance upgrades that
+ * specific copy — duplicates are independent thanks to instance ids.
+ */
+export function renderForgeScene(app: GameApp, deck: RunCardInstance[]): HTMLElement {
   const scene = el("div", { class: "scene event-scene" });
   const card = el("div", { class: "panel event-card", style: { maxWidth: "820px" } as Partial<CSSStyleDeclaration> }, [
     el("h2", { text: "Signal Forge" }),
@@ -42,20 +45,17 @@ export function renderForgeScene(app: GameApp, heroes: HeroRunState[]): HTMLElem
   ]);
   const grid = el("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "10px", marginTop: "10px" } as Partial<CSSStyleDeclaration> });
   let anyOffered = false;
-  for (const [hi, hero] of heroes.entries()) {
-    const upgraded = new Set(hero.upgraded);
-    for (const [i, defId] of hero.deck.entries()) {
-      const def = getCardDef(defId);
-      if (def.rarity === "curse") continue;
-      if (upgraded.has(defId) && hero.upgraded.filter((x) => x === defId).length >= hero.deck.filter((x) => x === defId).length) continue;
-      if (!def.upgradedDescription && !def.upgradedEffects && def.upgradedCost === undefined) continue;
-      anyOffered = true;
-      const inst = makeCardInstance(defId, false);
-      const node = renderCard(inst, {
-        onClick: () => { audio.play("reward"); app.upgradeCardInDeck(hi, i); },
-      });
-      grid.appendChild(node);
-    }
+  for (const runInst of deck) {
+    const def = getCardDef(runInst.cardId);
+    if (def.rarity === "curse") continue;
+    if (runInst.upgraded) continue;
+    if (!def.upgradedDescription && !def.upgradedEffects && def.upgradedCost === undefined) continue;
+    anyOffered = true;
+    const inst = makeCardInstance(runInst.cardId, false);
+    const node = renderCard(inst, {
+      onClick: () => { audio.play("reward"); app.upgradeCardInstance(runInst.instanceId); },
+    });
+    grid.appendChild(node);
   }
   if (!anyOffered) {
     grid.appendChild(el("div", { class: "dim", text: "No cards available to upgrade." }));

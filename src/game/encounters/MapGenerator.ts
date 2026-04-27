@@ -15,9 +15,16 @@ export function generateMap(rng: RNG): MapNode[] {
 
   for (let layer = 0; layer < L; layer++) {
     const row: MapNode[] = [];
-    for (let col = 0; col < N; col++) {
-      const kind = chooseKind(layer, col, L, rng);
-      const enc = chooseEncounter(kind, layer, rng);
+    // Final layer is exactly one boss node — funnel every penultimate path
+    // into a single climactic encounter. Multiple boss columns existed in
+    // the prototype but were never the design intent.
+    const isBossLayer = layer === L - 1;
+    const layerWidth = isBossLayer ? 1 : N;
+    const bossCol = Math.floor((N - 1) / 2);
+    for (let i = 0; i < layerWidth; i++) {
+      const col = isBossLayer ? bossCol : i;
+      const kind: MapNode["kind"] = isBossLayer ? "boss" : chooseKind(layer, col, L, rng);
+      const enc = isBossLayer ? "enc_boss_cipher" : chooseEncounter(kind, layer, rng);
       const n: MapNode = {
         id: `n_${layer}_${col}`,
         layer,
@@ -33,20 +40,17 @@ export function generateMap(rng: RNG): MapNode[] {
     nodes.push(row);
   }
 
-  // Final layer = boss (single node in the middle).
-  const bossLayer = nodes[L - 1];
-  for (const n of bossLayer) {
-    n.kind = "boss";
-    n.encounterId = "enc_boss_cipher";
-  }
-
   // Edges: each node connects to 1–2 nodes in the next layer, trying to keep
-  // lines mostly non-crossing (adjacent columns only).
+  // lines mostly non-crossing (adjacent columns only). The boss row has a
+  // single node, so every penultimate node points at it.
   for (let layer = 0; layer < L - 1; layer++) {
     const next = nodes[layer + 1];
     for (const node of nodes[layer]) {
-      const candidates = next.filter((m) => Math.abs(m.column - node.column) <= 1);
-      const choose = rng.int(1, Math.min(2, candidates.length));
+      const candidates =
+        next.length === 1
+          ? next.slice()
+          : next.filter((m) => Math.abs(m.column - node.column) <= 1);
+      const choose = Math.max(1, rng.int(1, Math.min(2, candidates.length)));
       const selected = rng.shuffle(candidates).slice(0, choose);
       for (const s of selected) node.next.push(s.id);
     }

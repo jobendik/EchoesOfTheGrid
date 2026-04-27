@@ -1,7 +1,44 @@
-import type { GridPos, RelicId, Side, UnitId } from "../../core/Types.js";
+import type { GridPos, KeywordId, RelicId, Side, UnitId } from "../../core/Types.js";
 import type { CardInstance } from "../cards/CardTypes.js";
 import type { Grid } from "../grid/Grid.js";
 import type { Unit } from "../units/UnitTypes.js";
+
+/**
+ * Concrete planned enemy action. Produced once at planning time and reused
+ * unchanged when the enemy turn resolves, so the intent the player sees
+ * always matches the action that actually executes.
+ */
+export type EnemyTurnAction =
+  | {
+      kind: "attack";
+      targetId: UnitId;
+      movePath: GridPos[];
+      damage: number;
+      /** Statuses applied to the target on hit (e.g. parasite Poison/Weak). */
+      appliesStatuses?: { status: KeywordId; stacks: number }[];
+    }
+  | {
+      kind: "aoe";
+      targetTile: GridPos;
+      movePath: GridPos[];
+      predictedDamage: number;
+      radius: number;
+      label: string;
+      /** Telegraph delay in enemy turns (0 = fire immediately). */
+      delay: number;
+    }
+  | { kind: "buff_ally"; targetId: UnitId; status: KeywordId; stacks: number; movePath: GridPos[] }
+  | { kind: "shield_self"; amount: number }
+  | { kind: "overwatch"; movePath: GridPos[] }
+  | { kind: "move"; movePath: GridPos[]; toward: UnitId }
+  | { kind: "summon_hazard"; tile: GridPos; movePath: GridPos[] }
+  | { kind: "prepare_charge"; chargedDamage: number; targetId: UnitId }
+  | { kind: "wait" };
+
+export interface PlannedEnemyAction {
+  action: EnemyTurnAction;
+  intent: Intent;
+}
 
 /** Enemy's planned action, generated before the player acts. */
 export interface Intent {
@@ -76,6 +113,12 @@ export interface CombatState {
   discardPile: CardInstance[];
   exhaustPile: CardInstance[];
   intents: Map<UnitId, Intent>;
+  /**
+   * Concrete planned actions per enemy. Populated whenever intents are
+   * regenerated, then consumed during {@link CombatController.resolveEnemyTurn}.
+   * Storing actions guarantees the displayed intent matches what runs.
+   */
+  plannedActions: Map<UnitId, PlannedEnemyAction>;
   /** Delayed effects such as bomber markers. */
   telegraphs: Telegraph[];
   log: CombatLogEntry[];
@@ -98,4 +141,22 @@ export interface Telegraph {
   tiles: GridPos[];
   damage: number;
   label: string;
+}
+
+/**
+ * Authoritative result of a finished combat. Tracked incrementally inside
+ * the {@link CombatController} so post-combat callers don't have to
+ * reconstruct counts (e.g. by counting `dead` units, which becomes wrong
+ * the moment we recycle the unit map across combats).
+ */
+export interface CombatResult {
+  victory: boolean;
+  enemiesDefeated: number;
+  damageDealt: number;
+  damageTaken: number;
+  turnsTaken: number;
+  /** Final HP per surviving hero (excludes downed heroes). */
+  heroHp: { unitId: UnitId; heroClass: string; hp: number; maxHp: number }[];
+  /** Hero ids that hit 0 HP at any point during this combat. */
+  downedHeroes: UnitId[];
 }

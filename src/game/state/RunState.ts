@@ -3,16 +3,31 @@ import type { CardId, EncounterId, HeroClassId, RelicId } from "../../core/Types
 /**
  * Run-level state. Persists between combats and is serialized to
  * localStorage between nodes.
+ *
+ * Card ownership model: the squad shares a single deck (`RunState.deck`).
+ * Heroes contribute their starting card lists when a run is created, but
+ * after that the deck is squad-wide — there is no concept of "this card
+ * belongs to hero N". Combat already uses one shared draw/hand/discard
+ * pile, so the per-hero deck array in the prototype was tracking
+ * ownership the simulation never honoured.
  */
+
+/**
+ * A single, addressable card in the squad's deck. Multiple instances can
+ * share a `cardId` while differing in `upgraded`, so upgrading one copy of
+ * Strike no longer upgrades every Strike in the deck.
+ */
+export interface RunCardInstance {
+  /** Stable id across the run; persists through saves. */
+  instanceId: string;
+  cardId: CardId;
+  upgraded: boolean;
+}
 
 export interface HeroRunState {
   heroClass: HeroClassId;
   maxHp: number;
   hp: number;
-  /** Card ids currently in the deck. Duplicates allowed. */
-  deck: CardId[];
-  /** Card ids that are upgraded. Matches entries in `deck` by first occurrence. */
-  upgraded: CardId[];
 }
 
 export interface MapNode {
@@ -37,6 +52,8 @@ export interface RunState {
   seed: string;
   seedNumber: number;
   heroes: HeroRunState[];
+  /** Squad-wide deck — instances are identified by `instanceId`. */
+  deck: RunCardInstance[];
   relics: RelicId[];
   gold: number;
   currentNodeId: string | null;
