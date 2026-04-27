@@ -44,6 +44,7 @@ export function computeDamage(
     if (attacker.side === "player") {
       for (const r of state.player.relics) {
         if (r === "marker_beacon" && (defender.statuses["marked"] ?? 0) > 0) dmg += 2;
+        if (r === "momentum_lens" && state.player.movedHeroesThisTurn.has(attacker.id)) dmg += 3;
       }
       // Scrap Multiplier: while a 0-cost card is being played, gain +3 dmg.
       if (state.player.zeroCostCardActive && state.player.relics.includes("scrap_multiplier")) {

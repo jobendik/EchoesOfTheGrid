@@ -238,8 +238,16 @@ export class CombatController {
     this.applyCombatStartRelics();
     // Shuffle and draw starting hand
     shuffleIntoDraw(this.state, this.rng);
-    // Move innate cards to start of draw pile so they land in hand.
-    // (Not critical for this prototype since no innate cards exist.)
+    // Move innate cards to the front of the draw pile so they always enter
+    // the opening hand regardless of draw order.
+    const innate: typeof this.state.drawPile = [];
+    const normal: typeof this.state.drawPile = [];
+    for (const card of this.state.drawPile) {
+      const def = getCardDef(card.defId);
+      if (def.innate) innate.push(card);
+      else normal.push(card);
+    }
+    this.state.drawPile = [...innate, ...normal];
     this.drawCardsWithSideEffects(this.state.player.startingHandSize);
     this.state.phase = "player_turn";
     this.state.turn = 1;
@@ -301,6 +309,13 @@ export class CombatController {
       if (id === "cipher_shard") {
         this.state.player.maxEnergy += 1;
         this.state.player.energy += 1;
+      }
+      if (id === "echo_frame") {
+        for (const h of this.heroes()) h.statuses["regen"] = (h.statuses["regen"] ?? 0) + 2;
+      }
+      if (id === "entropy_coil") {
+        for (const e of this.enemies()) e.statuses["burn"] = (e.statuses["burn"] ?? 0) + 2;
+        this.state.log.push({ ts: Date.now(), kind: "status", text: "Entropy Coil ignites all enemies." });
       }
     }
     // Class-based passives: each hero gets a small identity boost at the
@@ -556,10 +571,10 @@ export class CombatController {
     this.firstCardDiscountAvailable = this.state.player.relics.includes("first_move");
     // Energy-tile start-of-turn grants.
     this.grantEnergyTileBonuses();
-    // Start-of-turn relics
+    // Start-of-turn relics — accumulate extra draws.
     let drawCount = this.state.player.startingHandSize;
     for (const id of this.state.player.relics) {
-      if (id === "drawExtra") drawCount += 1; // legacy alias, not used
+      if (id === "tactical_reserve") drawCount += 1;
     }
     this.drawCardsWithSideEffects(drawCount);
     this.regenerateIntents();

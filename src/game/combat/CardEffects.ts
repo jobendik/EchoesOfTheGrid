@@ -83,8 +83,8 @@ function applyEffect(eff: CardEffectDefinition, ctx: EffectContext): void {
     }
     case "damageIfBelowHp": {
       for (const u of targetedUnits(ctx, "enemy")) {
-        const baseDmg = ctx.cardDef.id === "finisher" ? (ctx.upgraded ? 14 : 10) : 0;
-        const dmg = u.hp <= u.maxHp * eff.threshold ? eff.amount : baseDmg;
+        const dmg = u.hp <= u.maxHp * eff.threshold ? eff.amount : (eff.baseDamage ?? 0);
+        if (dmg <= 0) break;
         const res = applyDamage(caster, u, dmg, state);
         logDamage(state, caster, u, res.hpDamage + res.shieldAbsorbed, res.killed);
         reportDamage(ctx, caster.id, u.id, res.hpDamage + res.shieldAbsorbed);
@@ -111,8 +111,20 @@ function applyEffect(eff: CardEffectDefinition, ctx: EffectContext): void {
       state.log.push({ ts: Date.now(), kind: "status", text: `All allies gain ${eff.amount} Shield.` });
       break;
     }
+    case "healAllAllies": {
+      let totalHealed = 0;
+      for (const u of getAllUnits(state, "player")) {
+        totalHealed += heal(u, eff.amount);
+      }
+      if (totalHealed > 0) state.log.push({ ts: Date.now(), kind: "heal", text: `All allies healed ${eff.amount} HP.` });
+      break;
+    }
     case "applyStatus": {
-      const units = targetedUnits(ctx, ctx.cardDef.targeting.kind === "ally" || ctx.cardDef.targeting.kind === "self" ? "ally" : "enemy");
+      const side = ctx.cardDef.targeting.kind === "ally" || ctx.cardDef.targeting.kind === "self" ? "ally" : "enemy";
+      let units = targetedUnits(ctx, side);
+      if (eff.filterBelowHpPct !== undefined) {
+        units = units.filter((u) => u.hp <= u.maxHp * eff.filterBelowHpPct!);
+      }
       for (const u of units) addStatus(state, u, eff.status, eff.stacks);
       break;
     }
@@ -164,9 +176,17 @@ function applyEffect(eff: CardEffectDefinition, ctx: EffectContext): void {
     case "moveTarget": {
       const u = unitAt(state, target);
       if (!u && ctx.cardDef.targeting.kind === "emptyTile") {
-        // Move the first hero (caster) to that tile.
-        if (manhattan(caster.pos, target) <= eff.distance && state.grid.isWalkable(target)) {
-          moveUnit(state, caster, target);
+        // Teleport flag bypasses walkability (ignores blocked tiles), enabling
+        // true teleportation. Non-teleport cards still require a walkable path.
+        const inRange = manhattan(caster.pos, target) <= eff.distance;
+        const canLand = eff.teleport ? state.grid.inBounds(target) && !unitAt(state, target) : state.grid.isWalkable(target);
+        if (inRange && canLand) {
+          if (eff.teleport) {
+            caster.pos = { x: target.x, y: target.y };
+            state.player.movedHeroesThisTurn.add(caster.id);
+          } else {
+            moveUnit(state, caster, target);
+          }
         }
       } else if (u) {
         // Nudge them to an adjacent tile chosen deterministically.
@@ -253,10 +273,6 @@ function targetedUnits(ctx: EffectContext, side: "enemy" | "ally" | "any"): Unit
     case "self":
       return side === "ally" || side === "any" ? [caster] : [];
     case "allEnemies":
-      // System Crash targets all enemies below 50% HP when it's the effect.
-      if (cardDef.id === "system_crash") {
-        return getAllUnits(state, "enemy").filter((u) => u.hp <= u.maxHp / 2);
-      }
       return getAllUnits(state, "enemy");
     case "allAllies":
       return getAllUnits(state, "player");

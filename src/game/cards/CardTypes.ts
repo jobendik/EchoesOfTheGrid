@@ -53,8 +53,6 @@ export interface TargetingDefinition {
   /** Max Manhattan range from the caster. 0 means the caster's tile. */
   range: number;
   area: AreaShape;
-  /** If true, line-of-sight / occupancy requirements relax to "ground only". */
-  groundOnly?: boolean;
 }
 
 /** Every effect is a tagged union resolved by CardEffects.ts. */
@@ -62,11 +60,12 @@ export type CardEffectDefinition =
   | { kind: "damage"; amount: number }
   | { kind: "damageMarkedBonus"; amount: number }
   | { kind: "damageIfMoved"; amount: number }
-  | { kind: "damageIfBelowHp"; amount: number; threshold: number }
+  | { kind: "damageIfBelowHp"; amount: number; threshold: number; baseDamage?: number }
   | { kind: "heal"; amount: number }
   | { kind: "shield"; amount: number }
   | { kind: "shieldAllAllies"; amount: number }
-  | { kind: "applyStatus"; status: KeywordId; stacks: number }
+  | { kind: "healAllAllies"; amount: number }
+  | { kind: "applyStatus"; status: KeywordId; stacks: number; filterBelowHpPct?: number }
   | { kind: "applyStatusSelf"; status: KeywordId; stacks: number }
   | { kind: "applyStatusInArea"; status: KeywordId; stacks: number; side: "enemy" | "ally" }
   | { kind: "applyStatusAll"; status: KeywordId; stacks: number; side: "enemy" | "ally" }
@@ -75,7 +74,7 @@ export type CardEffectDefinition =
   | { kind: "gainEnergy"; amount: number }
   | { kind: "exhaustSelf" }
   | { kind: "moveSelf"; distance: number }
-  | { kind: "moveTarget"; distance: number }
+  | { kind: "moveTarget"; distance: number; teleport?: boolean }
   | { kind: "push"; distance: number }
   | { kind: "pull"; distance: number }
   | { kind: "swapPositions" }

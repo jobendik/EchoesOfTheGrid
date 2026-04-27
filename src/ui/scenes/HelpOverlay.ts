@@ -34,7 +34,9 @@ export function renderHelpOverlay(app: GameApp): HTMLElement {
     el("ul", {}, [
       el("li", { html: "<strong>Intent:</strong> enemy's locked action for its upcoming turn." }),
       el("li", { html: "<strong>Telegraph:</strong> delayed attack pattern shown as warning tiles." }),
-      el("li", { html: "<strong>Status effects:</strong> Burn, Poison, Marked, Weak, Vulnerable, Stun, Rooted, Retaliate." }),
+      el("li", { html: "<strong>Status effects:</strong> Burn, Poison, Marked, Weak, Vulnerable, Stun, Rooted, Retaliate, Regen." }),
+      el("li", { html: "<strong>Innate:</strong> card always enters your opening hand on turn 1." }),
+      el("li", { html: "<strong>Retain:</strong> card stays in hand when you end your turn instead of being discarded." }),
       el("li", { html: "<strong>Energy tile:</strong> grants +1 energy at start of your turn when occupied." }),
     ]),
     el("div", { class: "buttons" }, [

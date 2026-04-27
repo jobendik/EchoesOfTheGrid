@@ -98,7 +98,6 @@ export interface PlayerState {
 export type CombatPhase =
   | "intro"
   | "player_turn"
-  | "resolving"
   | "enemy_turn"
   | "victory"
   | "defeat";

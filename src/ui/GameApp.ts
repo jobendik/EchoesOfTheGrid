@@ -284,9 +284,14 @@ export class GameApp {
       if (node) node.completed = true;
       if (!this.run.completedNodeIds.includes(nodeId)) this.run.completedNodeIds.push(nodeId);
     }
-    // Victory on the boss node ends the run.
+    // Victory on the boss node ends the run — award the boss relic first.
     const node = this.run.map.find((n) => n.id === this.run!.currentNodeId);
     if (node?.kind === "boss") {
+      const cipherShard = RELICS.find((r) => r.id === "cipher_shard");
+      if (cipherShard && !this.run.relics.includes("cipher_shard")) {
+        this.run.relics.push("cipher_shard");
+        if (this.run.stats) this.run.stats.relicsCollected += 1;
+      }
       this.showVictoryScreen();
       return;
     }
@@ -320,7 +325,7 @@ export class GameApp {
     this.combatScene = null;
     const overlay = el("div", { class: "overlay" });
     const panel = el("div", { class: "panel card-large" }, [
-      el("h2", { text: "Defeat" }),
+      el("h2", { class: "defeat-title", text: "Signal Lost" }),
       el("div", { class: "dim", text: "The Grid overwhelms your squad. Another signal is lost to the dark." }),
     ]);
     if (run) panel.appendChild(this.buildRunSummary(run));
@@ -335,7 +340,7 @@ export class GameApp {
     const run = this.run;
     const overlay = el("div", { class: "overlay" });
     const panel = el("div", { class: "panel card-large" }, [
-      el("h2", { text: "Run Complete" }),
+      el("h2", { class: "victory-title", text: "Run Complete" }),
       el("div", { class: "dim", text: "The Cipher collapses. The grid hums with silence. A clean signal, at last." }),
     ]);
     if (run) panel.appendChild(this.buildRunSummary(run));

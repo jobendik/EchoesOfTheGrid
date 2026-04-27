@@ -372,11 +372,14 @@ h3 { font-size: 16px; }
   color: var(--c-fg-dim);
 }
 .combat-log .log-entry { padding: 1px 0; }
-.combat-log .log-entry.damage { color: var(--c-enemy); }
-.combat-log .log-entry.heal { color: var(--c-poison); }
-.combat-log .log-entry.status { color: var(--c-marked); }
-.combat-log .log-entry.death { color: #ff3355; font-weight: 600; }
-.combat-log .log-entry.turn { color: var(--c-highlight); }
+.combat-log .log-entry.damage  { color: var(--c-enemy); }
+.combat-log .log-entry.heal    { color: var(--c-poison); }
+.combat-log .log-entry.status  { color: var(--c-marked); }
+.combat-log .log-entry.death   { color: #ff3355; font-weight: 600; }
+.combat-log .log-entry.turn    { color: var(--c-highlight); border-top: 1px solid var(--c-border); margin-top: 2px; padding-top: 2px; }
+.combat-log .log-entry.relic   { color: var(--c-rare); font-style: italic; }
+.combat-log .log-entry.intent  { color: #c09060; }
+.combat-log .log-entry.info    { color: var(--c-fg-dim); }
 
 /* ── Hero HUD (per hero) ────────────────────────────────────────────────── */
 .party-hud {
@@ -393,7 +396,15 @@ h3 { font-size: 16px; }
   transition: border-color 0.15s ease;
   position: relative;
 }
-.hero-plate.active { border-color: var(--c-player); box-shadow: 0 0 0 1px var(--c-player-glow); }
+.hero-plate.active {
+  border-color: var(--c-player);
+  box-shadow: 0 0 0 1px var(--c-player-glow), 0 0 16px rgba(107,184,255,0.18);
+  animation: heroActivePulse 2.4s ease-in-out infinite;
+}
+@keyframes heroActivePulse {
+  0%, 100% { box-shadow: 0 0 0 1px var(--c-player-glow), 0 0 12px rgba(107,184,255,0.12); }
+  50%       { box-shadow: 0 0 0 1px var(--c-player-glow), 0 0 22px rgba(107,184,255,0.28); }
+}
 .hero-plate .name-row { display: flex; align-items: center; justify-content: space-between; }
 .hero-plate .name { font-weight: 600; font-size: 14px; }
 .hero-plate .hp-text { font-family: var(--font-mono); font-size: 12px; color: var(--c-fg-dim); }
@@ -415,6 +426,34 @@ h3 { font-size: 16px; }
   padding: 1px 6px;
   display: inline-flex; align-items: center; gap: 4px;
   font-family: var(--font-mono);
+  font-size: 10px;
+}
+/* Status-specific pill colors */
+.status-shield    { border-color: var(--c-shield);  color: var(--c-shield); }
+.status-regen     { border-color: var(--c-poison);  color: var(--c-poison); }
+.status-strength  { border-color: var(--c-gold);    color: var(--c-gold); }
+.status-retaliate { border-color: var(--c-player);  color: var(--c-player); }
+.status-poison    { border-color: var(--c-poison);  color: var(--c-poison); }
+.status-burn      { border-color: var(--c-burn);    color: var(--c-burn); }
+.status-marked    { border-color: var(--c-marked);  color: var(--c-marked); }
+.status-vulnerable{ border-color: var(--c-hazard);  color: var(--c-hazard); }
+.status-weak      { border-color: var(--c-fg-muted);color: var(--c-fg-muted); }
+.status-stun      { border-color: var(--c-highlight);color: var(--c-highlight); }
+.status-rooted    { border-color: #8b6d40;          color: #c49a5a; }
+.status-fragile   { border-color: #a04060;          color: #d06080; }
+.status-taunt     { border-color: var(--c-enemy);   color: var(--c-enemy); }
+
+.shield-badge {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--c-shield);
+  font-family: var(--font-mono);
+}
+.passive-label {
+  font-size: 10px;
+  margin-top: 2px;
+  color: var(--c-fg-muted);
+  letter-spacing: 0.03em;
 }
 
 /* ── Card hand ──────────────────────────────────────────────────────────── */
@@ -539,16 +578,30 @@ h3 { font-size: 16px; }
 /* ── Victory / Defeat / Transition overlays ─────────────────────────────── */
 .overlay {
   position: absolute; inset: 0;
-  background: rgba(4, 6, 14, 0.78);
-  backdrop-filter: blur(6px);
+  background: rgba(4, 6, 14, 0.82);
+  backdrop-filter: blur(8px);
   display: grid; place-items: center;
   z-index: 100;
+  animation: fadeIn 0.35s ease;
 }
 .overlay .card-large {
-  width: 420px; padding: 30px;
+  width: 460px; padding: 32px;
   text-align: center;
+  border-color: var(--c-border-strong);
 }
-.overlay h2 { font-size: 26px; }
+.overlay h2 {
+  font-size: 30px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.overlay h2.victory-title {
+  color: var(--c-highlight);
+  text-shadow: 0 0 30px rgba(155,232,255,0.5);
+}
+.overlay h2.defeat-title {
+  color: var(--c-enemy);
+  text-shadow: 0 0 30px rgba(255,107,122,0.5);
+}
 .overlay .buttons { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
 
 /* ── Tooltips ───────────────────────────────────────────────────────────── */
@@ -632,19 +685,26 @@ h3 { font-size: 16px; }
   margin: 14px 0 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px 14px;
+  gap: 0;
+  padding: 6px 0;
   background: var(--c-bg-1);
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: 8px;
+  overflow: hidden;
+  text-align: left;
 }
 .summary-row {
   display: flex;
   justify-content: space-between;
   font-size: 13px;
-  padding: 2px 0;
+  padding: 5px 14px;
 }
+.summary-row:nth-child(even) {
+  background: rgba(255,255,255,0.025);
+}
+.summary-label { color: var(--c-fg-dim); }
 .summary-value {
   color: var(--c-fg);
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
