@@ -3,7 +3,7 @@ import type { CardDefinition } from "../../game/cards/CardTypes.js";
 import { getCardDef } from "../../data/cards.js";
 import type { RelicDefinition } from "../../game/relics/RelicTypes.js";
 import { makeCardInstance } from "../../game/cards/DeckManager.js";
-import type { HeroRunState } from "../../game/state/RunState.js";
+import type { HeroRunState, RunCardInstance } from "../../game/state/RunState.js";
 import { renderCard } from "../CardView.js";
 import { el } from "../UIHelpers.js";
 import type { GameApp } from "../GameApp.js";
@@ -21,7 +21,7 @@ export interface ShopStock {
   healUsed: boolean;
 }
 
-export function renderShopScene(app: GameApp, stock: ShopStock, heroes: HeroRunState[], gold: number): HTMLElement {
+export function renderShopScene(app: GameApp, stock: ShopStock, heroes: HeroRunState[], deck: RunCardInstance[], gold: number): HTMLElement {
   const scene = el("div", { class: "scene event-scene" });
   const panel = el("div", { class: "panel event-card", style: { maxWidth: "900px" } as Partial<CSSStyleDeclaration> }, [
     el("h2", { text: "Scrap Market" }),
@@ -148,7 +148,10 @@ export function renderShopScene(app: GameApp, stock: ShopStock, heroes: HeroRunS
     el("div", { class: "dim", style: { fontSize: "11px", fontFamily: "var(--font-mono)" } as Partial<CSSStyleDeclaration>, text: `Heal each hero 30% — ${stock.healPrice} scrap` }),
   ]));
 
-  const canRemove = gold >= stock.removalPrice && !stock.removalUsed && heroes.some((h) => h.deck.some((id) => getCardDef(id).rarity !== "starter"));
+  const canRemove =
+    gold >= stock.removalPrice &&
+    !stock.removalUsed &&
+    deck.some((c) => getCardDef(c.cardId).rarity !== "starter");
   services.appendChild(el("button", {
     class: canRemove ? "primary" : "subtle",
     onClick: () => {
@@ -167,8 +170,12 @@ export function renderShopScene(app: GameApp, stock: ShopStock, heroes: HeroRunS
   return scene;
 }
 
-/** Removal picker: shows the deck; clicking a removable card removes it. */
-export function renderShopRemovalScene(app: GameApp, heroes: HeroRunState[]): HTMLElement {
+/**
+ * Removal picker: shows the squad deck; clicking a removable instance
+ * removes that specific card by `instanceId` so duplicates can be told
+ * apart (and only the chosen copy disappears).
+ */
+export function renderShopRemovalScene(app: GameApp, deck: RunCardInstance[]): HTMLElement {
   const scene = el("div", { class: "scene event-scene" });
   const panel = el("div", { class: "panel event-card", style: { maxWidth: "820px" } as Partial<CSSStyleDeclaration> }, [
     el("h2", { text: "Signal Purge" }),
@@ -183,20 +190,18 @@ export function renderShopRemovalScene(app: GameApp, heroes: HeroRunState[]): HT
     } as Partial<CSSStyleDeclaration>,
   });
   let any = false;
-  for (const [hi, hero] of heroes.entries()) {
-    for (const [i, defId] of hero.deck.entries()) {
-      const def = getCardDef(defId);
-      if (def.rarity === "starter") continue;
-      any = true;
-      const inst = makeCardInstance(defId, hero.upgraded.includes(defId));
-      const node = renderCard(inst, {
-        onClick: () => {
-          audio.play("cardSelect");
-          app.confirmShopRemoval(hi, i);
-        },
-      });
-      grid.appendChild(node);
-    }
+  for (const runInst of deck) {
+    const def = getCardDef(runInst.cardId);
+    if (def.rarity === "starter") continue;
+    any = true;
+    const inst = makeCardInstance(runInst.cardId, runInst.upgraded);
+    const node = renderCard(inst, {
+      onClick: () => {
+        audio.play("cardSelect");
+        app.confirmShopRemoval(runInst.instanceId);
+      },
+    });
+    grid.appendChild(node);
   }
   if (!any) {
     grid.appendChild(el("div", { class: "dim", text: "Nothing available to remove." }));

@@ -1,4 +1,4 @@
-import type { GridPos, KeywordId } from "../../core/Types.js";
+import type { GridPos, KeywordId, UnitId } from "../../core/Types.js";
 import { manhattan } from "../grid/Grid.js";
 import { applyDamage, gainShield, heal } from "./DamageSystem.js";
 import type { CombatState } from "../state/CombatState.js";
@@ -9,6 +9,14 @@ import type {
 } from "../cards/CardTypes.js";
 import { getAllUnits, unitAt, unitsOnTiles } from "./TargetingSystem.js";
 import { makeCardInstance } from "../cards/DeckManager.js";
+
+/**
+ * Optional sink for damage events produced by card effects. The combat
+ * controller plugs in its event bus so the UI and result tracker hear about
+ * player damage in the same channel as enemy damage. Decoupling via a
+ * callback keeps the effect resolver free of event-bus knowledge.
+ */
+export type DamageReporter = (e: { attackerId?: UnitId; defenderId: UnitId; amount: number }) => void;
 
 /**
  * The effect resolver. Each effect kind maps to a small handler so adding a
@@ -28,6 +36,8 @@ export interface EffectContext {
   upgraded: boolean;
   /** Effect list being used (upgraded or base). */
   effects: readonly CardEffectDefinition[];
+  /** Optional event sink wired by the controller. */
+  reportDamage?: DamageReporter;
 }
 
 export function applyCardEffects(ctx: EffectContext): void {
@@ -41,9 +51,11 @@ function applyEffect(eff: CardEffectDefinition, ctx: EffectContext): void {
       for (const u of targetedUnits(ctx, "enemy")) {
         const res = applyDamage(caster, u, eff.amount, state);
         logDamage(state, caster, u, res.hpDamage + res.shieldAbsorbed, res.killed);
+        reportDamage(ctx, caster.id, u.id, res.hpDamage + res.shieldAbsorbed);
         if (res.retaliate > 0 && !caster.dead) {
           const r = applyDamage(u, caster, res.retaliate, state);
           logDamage(state, u, caster, r.hpDamage + r.shieldAbsorbed, r.killed, " (Retaliate)");
+          reportDamage(ctx, u.id, caster.id, r.hpDamage + r.shieldAbsorbed);
         }
         if (res.killed) state.player.relics.includes("vampiric_chip") && healLowestHero(state, 2);
       }
@@ -55,6 +67,7 @@ function applyEffect(eff: CardEffectDefinition, ctx: EffectContext): void {
         if ((u.statuses["marked"] ?? 0) > 0) {
           const res = applyDamage(caster, u, eff.amount, state);
           logDamage(state, caster, u, res.hpDamage + res.shieldAbsorbed, res.killed, " (Marked bonus)");
+          reportDamage(ctx, caster.id, u.id, res.hpDamage + res.shieldAbsorbed);
         }
       }
       break;
@@ -64,6 +77,7 @@ function applyEffect(eff: CardEffectDefinition, ctx: EffectContext): void {
       for (const u of targetedUnits(ctx, "enemy")) {
         const res = applyDamage(caster, u, eff.amount, state);
         logDamage(state, caster, u, res.hpDamage + res.shieldAbsorbed, res.killed, " (Momentum)");
+        reportDamage(ctx, caster.id, u.id, res.hpDamage + res.shieldAbsorbed);
       }
       break;
     }
@@ -73,6 +87,7 @@ function applyEffect(eff: CardEffectDefinition, ctx: EffectContext): void {
         const dmg = u.hp <= u.maxHp * eff.threshold ? eff.amount : baseDmg;
         const res = applyDamage(caster, u, dmg, state);
         logDamage(state, caster, u, res.hpDamage + res.shieldAbsorbed, res.killed);
+        reportDamage(ctx, caster.id, u.id, res.hpDamage + res.shieldAbsorbed);
       }
       if (caster.side === "player") state.player.attacksThisTurn += 1;
       break;
@@ -205,6 +220,7 @@ function applyEffect(eff: CardEffectDefinition, ctx: EffectContext): void {
         hit.add(cur.id);
         const res = applyDamage(caster, cur, eff.amount, state);
         logDamage(state, caster, cur, res.hpDamage + res.shieldAbsorbed, res.killed, " (Chain)");
+        reportDamage(ctx, caster.id, cur.id, res.hpDamage + res.shieldAbsorbed);
         jumps -= 1;
         const next = nearestUnseenEnemy(state, cur.pos, hit);
         cur = next;
@@ -270,6 +286,12 @@ export function addStatus(state: CombatState, unit: Unit, status: KeywordId, sta
 }
 
 const STATUS_DEBUFFS = new Set(["weak", "vulnerable", "poison", "burn", "fragile", "rooted", "stun", "marked"]);
+
+function reportDamage(ctx: EffectContext, attackerId: UnitId | undefined, defenderId: UnitId, amount: number): void {
+  if (amount <= 0) return;
+  if (!ctx.reportDamage) return;
+  ctx.reportDamage({ attackerId, defenderId, amount });
+}
 
 function logDamage(
   state: CombatState,

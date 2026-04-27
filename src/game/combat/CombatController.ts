@@ -10,7 +10,13 @@ import type { CardInstance } from "../cards/CardTypes.js";
 import { discardHand, drawCards, makeCardInstance, shuffleIntoDraw } from "../cards/DeckManager.js";
 import { Grid } from "../grid/Grid.js";
 import { manhattan } from "../grid/Grid.js";
-import type { CombatState, Intent } from "../state/CombatState.js";
+import type {
+  CombatResult,
+  CombatState,
+  EnemyTurnAction,
+  Intent,
+  PlannedEnemyAction,
+} from "../state/CombatState.js";
 import type { HeroClassId } from "../../core/Types.js";
 import { createEnemy, createHero } from "../units/UnitFactory.js";
 import type { Unit } from "../units/UnitTypes.js";
@@ -45,13 +51,20 @@ export interface CombatSetup {
   encounterId: string;
   heroes: {
     heroClass: HeroClassId;
-    startingDeck: readonly string[];
-    upgraded?: readonly string[];
     /** Current HP carried from the run state. Defaults to maxHp. */
     hp?: number;
     /** Max HP carried from the run state. Defaults to class blueprint. */
     maxHp?: number;
   }[];
+  /**
+   * Squad-wide deck for this combat. Each entry becomes one CardInstance in
+   * the draw pile. Per-hero deck arrays are NOT supported — the squad
+   * shares one deck (see `RunState.deck`).
+   *
+   * Tests can pass plain `{ cardId, upgraded? }` shapes; the controller
+   * promotes them to full instances.
+   */
+  deck: ReadonlyArray<{ instanceId?: string; cardId: string; upgraded?: boolean }>;
   relics: RelicId[];
   seed: number;
 }
@@ -64,12 +77,71 @@ export class CombatController {
   readonly setup: CombatSetup;
   /** Tracks whose turn-start effects have been processed for this turn. */
   private firstCardDiscountAvailable = false;
+  /**
+   * Live combat result. Counters are incremented as events occur during
+   * combat so the post-combat summary doesn't depend on inspecting the
+   * final unit graph (which is unreliable: dead units may get GC'd or
+   * reused, and stat tracking has to handle revives, downs, etc.).
+   */
+  private result: CombatResult = {
+    victory: false,
+    enemiesDefeated: 0,
+    damageDealt: 0,
+    damageTaken: 0,
+    turnsTaken: 0,
+    heroHp: [],
+    downedHeroes: [],
+  };
+  /** Hero ids already counted as "downed" so we don't double-count revives. */
+  private downedSet = new Set<UnitId>();
 
   constructor(setup: CombatSetup, rng: RNG) {
     this.setup = setup;
     this.rng = rng;
     this.state = this.buildState();
+    this.wireResultTracking();
     this.startCombat();
+  }
+
+  /** Subscribe to events that feed the {@link CombatResult}. */
+  private wireResultTracking(): void {
+    this.events.on("damageDealt", (p) => {
+      const attacker = p.attackerId ? this.state.units.get(p.attackerId) : undefined;
+      const defender = this.state.units.get(p.defenderId);
+      if (!defender) return;
+      if (attacker?.side === "player" && defender.side === "enemy") {
+        this.result.damageDealt += p.amount;
+      } else if (defender.side === "player") {
+        this.result.damageTaken += p.amount;
+      }
+    });
+    this.events.on("unitDied", (p) => {
+      const u = this.state.units.get(p.unitId);
+      if (!u) return;
+      if (u.side === "enemy") {
+        this.result.enemiesDefeated += 1;
+      } else if (u.side === "player" && !this.downedSet.has(u.id)) {
+        this.downedSet.add(u.id);
+        this.result.downedHeroes.push(u.id);
+      }
+    });
+  }
+
+  /** Live combat result; finalised when the combat ends. */
+  getResult(): CombatResult {
+    // Snapshot survivors at request time so callers always see fresh data.
+    const heroHp: CombatResult["heroHp"] = [];
+    for (const id of this.state.player.heroIds) {
+      const u = this.state.units.get(id);
+      if (!u || u.dead) continue;
+      heroHp.push({ unitId: u.id, heroClass: u.heroClass ?? "?", hp: u.hp, maxHp: u.maxHp });
+    }
+    return {
+      ...this.result,
+      heroHp,
+      turnsTaken: this.state.turn,
+      victory: this.state.phase === "victory",
+    };
   }
 
   // ── Setup ─────────────────────────────────────────────────────────────────
@@ -82,11 +154,12 @@ export class CombatController {
     const grid = new Grid(gw, gh);
     if (enc.terrain) for (const patch of enc.terrain) for (const t of patch.tiles) grid.setKind(t, patch.kind);
 
-    // Deck, piles
+    // Squad deck → draw pile. Each run-level instance becomes one in-combat
+    // CardInstance, preserving its upgrade flag independently from siblings
+    // sharing the same `cardId`.
     const draw: CardInstance[] = [];
-    for (const h of this.setup.heroes) {
-      const upgraded = new Set(h.upgraded ?? []);
-      for (const defId of h.startingDeck) draw.push(makeCardInstance(defId, upgraded.has(defId)));
+    for (const inst of this.setup.deck) {
+      draw.push(makeCardInstance(inst.cardId, inst.upgraded === true));
     }
 
     const state: CombatState = {
@@ -111,6 +184,7 @@ export class CombatController {
       discardPile: [],
       exhaustPile: [],
       intents: new Map(),
+      plannedActions: new Map(),
       telegraphs: [],
       log: [],
       phase: "intro",
@@ -264,11 +338,18 @@ export class CombatController {
 
   // ── Intent planning ───────────────────────────────────────────────────────
 
+  /**
+   * Recompute intents AND concrete planned actions for every living enemy.
+   * Both are stored so the enemy turn never re-plans — the action the
+   * player saw in the intent line is the one that runs.
+   */
   regenerateIntents(): void {
     this.state.intents.clear();
+    this.state.plannedActions.clear();
     for (const enemy of this.enemies()) {
       const plan = planEnemyAction(this.state, enemy);
       this.state.intents.set(enemy.id, plan.intent);
+      this.state.plannedActions.set(enemy.id, plan);
     }
   }
 
@@ -341,6 +422,7 @@ export class CombatController {
       casterMovedThisTurn: movedBefore,
       upgraded: card.upgraded,
       effects,
+      reportDamage: (e) => this.events.emit("damageDealt", e),
     });
 
     // Always clear the flag after resolution.
@@ -441,7 +523,10 @@ export class CombatController {
         this.state.log.push({ ts: Date.now(), kind: "intent", text: `${enemy.name} is stunned.` });
         continue;
       }
-      const plan = planEnemyAction(this.state, enemy);
+      // Use the action that was planned at intent time. Falling back to a
+      // fresh plan only when no plan exists (e.g. enemies summoned mid-turn)
+      // keeps the no-replanning invariant: what the player saw is what runs.
+      const plan = this.state.plannedActions.get(enemy.id) ?? planEnemyAction(this.state, enemy);
       this.performEnemyAction(enemy, plan);
       this.reapTheDead();
       if (this.checkVictory()) return;
@@ -475,51 +560,66 @@ export class CombatController {
     this.events.emit("stateChanged", { reason: "player_turn_start" });
   }
 
-  private performEnemyAction(enemy: Unit, plan: ReturnType<typeof planEnemyAction>): void {
-    const act = plan.action;
+  private performEnemyAction(enemy: Unit, plan: PlannedEnemyAction): void {
+    const act: EnemyTurnAction = plan.action;
     switch (act.kind) {
       case "wait":
         return;
       case "attack": {
-        // Move to best position, then hit.
         const target = this.state.units.get(act.targetId);
-        if (!target) return;
-        // Ranged enemies move to their attack range; melee to 1.
-        const desiredRange = Math.max(1, enemy.attackRange ?? 1);
-        this.moveEnemyToward(enemy, target.pos, desiredRange);
-        const distance = manhattan(enemy.pos, target.pos);
-        if (distance <= (enemy.attackRange ?? 1)) {
-          const dmg = enemy.attackDamage ?? 3;
+        if (!target || target.dead) return;
+        // Walk the planned path step-by-step, respecting blockers and
+        // statuses. The path was computed against the same state the
+        // intent saw, so this matches the player's preview.
+        if ((enemy.statuses["rooted"] ?? 0) === 0) this.followPath(enemy, act.movePath);
+        const reach = enemy.attackRange ?? 1;
+        if (manhattan(enemy.pos, target.pos) <= reach) {
+          const dmg = act.damage;
           const res = applyDamage(enemy, target, dmg, this.state);
-          this.logAttack(enemy, target, res.hpDamage + res.shieldAbsorbed);
-          this.events.emit("damageDealt", { attackerId: enemy.id, defenderId: target.id, amount: res.hpDamage + res.shieldAbsorbed });
+          const total = res.hpDamage + res.shieldAbsorbed;
+          this.logAttack(enemy, target, total);
+          this.events.emit("damageDealt", { attackerId: enemy.id, defenderId: target.id, amount: total });
           if (res.retaliate > 0) {
             const r = applyDamage(target, enemy, res.retaliate, this.state);
             this.logAttack(target, enemy, r.hpDamage + r.shieldAbsorbed, " (Retaliate)");
           }
+          // Apply statuses promised by the intent (e.g. parasite Poison/Weak).
+          if (act.appliesStatuses && !target.dead) {
+            for (const s of act.appliesStatuses) addStatus(this.state, target, s.status, s.stacks);
+          }
         }
+        // Charged shots consume the charging status the moment they fire.
+        if ((enemy.statuses["charging"] ?? 0) > 0) delete enemy.statuses["charging"];
         return;
       }
-      case "charge": {
-        const target = this.state.units.get(act.targetId);
-        if (!target) return;
-        this.moveEnemyToward(enemy, target.pos, 1);
+      case "move": {
+        if ((enemy.statuses["rooted"] ?? 0) > 0) return;
+        this.followPath(enemy, act.movePath);
+        return;
+      }
+      case "prepare_charge": {
+        // Lock the enemy into a charged state. The planner will fire on the
+        // next plan because `charging > 0`.
+        enemy.statuses["charging"] = 1;
+        this.state.log.push({
+          ts: Date.now(),
+          kind: "intent",
+          text: `${enemy.name} charges a heavy shot (${act.chargedDamage} incoming).`,
+        });
         return;
       }
       case "aoe": {
-        // Schedule a telegraph that fires next turn (for bombers). For boss,
-        // fire immediately at target tile.
-        if (enemy.enemyKind === "boss_cipher") {
-          this.applyAoe(enemy, act.targetTile, act.radius, act.predictedDamage);
-        } else {
+        if (act.delay > 0) {
           this.state.telegraphs.push({
             ownerId: enemy.id,
-            turnsRemaining: 1,
+            turnsRemaining: act.delay,
             tiles: aoeTiles(act.targetTile, act.radius),
             damage: act.predictedDamage,
             label: act.label,
           });
           this.state.log.push({ ts: Date.now(), kind: "intent", text: `${enemy.name} arms a ${act.label}.` });
+        } else {
+          this.applyAoe(enemy, act.targetTile, act.radius, act.predictedDamage);
         }
         return;
       }
@@ -543,22 +643,22 @@ export class CombatController {
     }
   }
 
-  private moveEnemyToward(enemy: Unit, target: GridPos, desiredRange: number): void {
-    // Greedy step: take up to moveRange steps toward target (ignoring proper
-    // pathfinding for simplicity; this is sufficient for open grids).
-    if ((enemy.statuses["rooted"] ?? 0) > 0) return;
-    for (let i = 0; i < enemy.moveRange; i++) {
-      if (manhattan(enemy.pos, target) <= desiredRange) break;
-      const dx = Math.sign(target.x - enemy.pos.x);
-      const dy = Math.sign(target.y - enemy.pos.y);
-      const options: GridPos[] = [];
-      if (dx !== 0) options.push({ x: enemy.pos.x + dx, y: enemy.pos.y });
-      if (dy !== 0) options.push({ x: enemy.pos.x, y: enemy.pos.y + dy });
-      // fall back to any move closer
-      const viable = options.find((p) => this.state.grid.isWalkable(p) && !unitAt(this.state, p));
-      if (!viable) break;
-      enemy.pos = viable;
-      if (this.state.grid.getKind(viable) === "hazard") {
+  /**
+   * Step the enemy along the planned path until blocked or finished. Each
+   * step re-checks walkability and occupation in case the player altered
+   * the world between planning and execution. Hazard tiles damage the unit
+   * exactly as before.
+   */
+  private followPath(enemy: Unit, path: GridPos[]): void {
+    let stepsLeft = enemy.moveRange;
+    for (const step of path) {
+      if (stepsLeft <= 0) break;
+      if (!this.state.grid.isWalkable(step)) break;
+      const occ = unitAt(this.state, step);
+      if (occ && occ.id !== enemy.id) break;
+      enemy.pos = { x: step.x, y: step.y };
+      stepsLeft -= 1;
+      if (this.state.grid.getKind(enemy.pos) === "hazard") {
         const res = applyDamage(undefined, enemy, 3, this.state);
         this.logAttack(undefined, enemy, res.hpDamage + res.shieldAbsorbed, " (Hazard)");
       }
@@ -585,7 +685,11 @@ export class CombatController {
           const u = unitAt(this.state, tile);
           if (u && u.side === "player") {
             const res = applyDamage(undefined, u, t.damage, this.state);
-            this.logAttack(undefined, u, res.hpDamage + res.shieldAbsorbed, ` (${t.label})`);
+            const total = res.hpDamage + res.shieldAbsorbed;
+            this.logAttack(undefined, u, total, ` (${t.label})`);
+            // Emit a damageDealt event so the result tracker accounts for
+            // telegraph hits as damage taken.
+            if (total > 0) this.events.emit("damageDealt", { defenderId: u.id, amount: total });
           }
         }
       } else {

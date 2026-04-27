@@ -12,8 +12,13 @@ describe("CombatController", () => {
     const ctrl = new CombatController(
       {
         encounterId: "enc_drone_patrol",
-        heroes: [
-          { heroClass: "vanguard", startingDeck: ["strike", "strike", "guard", "guard", "step"] },
+        heroes: [{ heroClass: "vanguard" }],
+        deck: [
+          { cardId: "strike" },
+          { cardId: "strike" },
+          { cardId: "guard" },
+          { cardId: "guard" },
+          { cardId: "step" },
         ],
         relics: [],
         seed: 7,
@@ -33,8 +38,12 @@ describe("CombatController", () => {
     const ctrl = new CombatController(
       {
         encounterId: "enc_drone_patrol",
-        heroes: [
-          { heroClass: "vanguard", startingDeck: ["strike", "guard", "step", "hold_the_line"] },
+        heroes: [{ heroClass: "vanguard" }],
+        deck: [
+          { cardId: "strike" },
+          { cardId: "guard" },
+          { cardId: "step" },
+          { cardId: "hold_the_line" },
         ],
         relics: [],
         seed: 99,
@@ -55,7 +64,15 @@ describe("CombatController", () => {
   it("shuffles cards correctly into the draw pile with a given seed", () => {
     const setup = {
       encounterId: "enc_drone_patrol",
-      heroes: [{ heroClass: "vanguard" as const, startingDeck: ["strike", "strike", "guard", "guard", "step", "hold_the_line"] }],
+      heroes: [{ heroClass: "vanguard" as const }],
+      deck: [
+        { cardId: "strike" },
+        { cardId: "strike" },
+        { cardId: "guard" },
+        { cardId: "guard" },
+        { cardId: "step" },
+        { cardId: "hold_the_line" },
+      ],
       relics: [],
       seed: 1234,
     };
