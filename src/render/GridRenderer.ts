@@ -19,6 +19,16 @@ export interface RenderOverlay {
   cameraShake: number;
   /** Floating damage numbers to render in screen space. */
   floaters: { id: string; pos: GridPos; text: string; kind: "damage" | "heal" | "shield"; start: number }[];
+  movementRange?: GridPos[];
+  attackRange?: GridPos[];
+  targetLine?: { from: GridPos; to: GridPos } | null;
+  presentation?: {
+    moveTweens: Map<UnitId, { from: GridPos; to: GridPos; start: number; duration: number }>;
+    hitFlashes: Map<UnitId, number>;
+    shieldPulses: Map<UnitId, number>;
+    dissolves: Map<UnitId, number>;
+    projectiles: { id: string; from: GridPos; to: GridPos; start: number; duration: number }[];
+  };
 }
 
 export class GridRenderer {
@@ -99,6 +109,8 @@ export class GridRenderer {
 
     this.drawGridTiles(state);
     this.drawTelegraphs(state);
+    if (overlay.movementRange?.length) this.drawTileSet(overlay.movementRange, "rgba(123,232,160,0.08)", "rgba(123,232,160,0.28)");
+    if (overlay.attackRange?.length) this.drawTileSet(overlay.attackRange, "rgba(255,122,122,0.05)", "rgba(255,122,122,0.25)");
     if (overlay.validTiles.length > 0) this.drawTileSet(overlay.validTiles, "rgba(107,184,255,0.15)", "rgba(107,184,255,0.35)");
     if (overlay.selectedTiles.length > 0) this.drawTileSet(overlay.selectedTiles, "rgba(155,232,255,0.28)", "rgba(155,232,255,0.8)");
     if (overlay.hoverTile) this.drawTileSet([overlay.hoverTile], "rgba(255,255,255,0.06)", "rgba(255,255,255,0.5)");
@@ -108,8 +120,8 @@ export class GridRenderer {
     const enemies: Unit[] = [];
     for (const u of state.units.values()) if (!u.dead) (u.side === "player" ? heroes : enemies).push(u);
 
-    for (const u of heroes) this.drawUnit(u, overlay.activeHeroId === u.id);
-    for (const u of enemies) this.drawUnit(u, false);
+    for (const u of heroes) this.drawUnit(u, overlay.activeHeroId === u.id, overlay);
+    for (const u of enemies) this.drawUnit(u, false, overlay);
 
     // Intents
     if (overlay.showIntents || state.debug.revealIntents) this.drawIntents(state);
@@ -117,6 +129,8 @@ export class GridRenderer {
     // Hover intent details arrow
     if (overlay.hoverIntent) this.drawIntentEmphasis(overlay.hoverIntent, state);
 
+    if (overlay.targetLine) this.drawTargetLine(overlay.targetLine.from, overlay.targetLine.to);
+    this.drawProjectiles(overlay);
     // Floating damage numbers
     this.drawFloaters(overlay);
 
@@ -179,9 +193,18 @@ export class GridRenderer {
     }
   }
 
-  private drawUnit(u: Unit, isActive: boolean): void {
+  private drawUnit(u: Unit, isActive: boolean, overlay: RenderOverlay): void {
     const { ctx, tileSize: ts } = this;
-    const { x, y } = this.tileCenter(u.pos);
+    let { x, y } = this.tileCenter(u.pos);
+    const now = performance.now();
+    const tween = overlay.presentation?.moveTweens.get(u.id);
+    if (tween) {
+      const t = Math.max(0, Math.min(1, (now - tween.start) / tween.duration));
+      const from = this.tileCenter(tween.from);
+      const to = this.tileCenter(tween.to);
+      x = from.x + (to.x - from.x) * t;
+      y = from.y + (to.y - from.y) * t;
+    }
 
     if (isActive) {
       ctx.strokeStyle = "rgba(255, 224, 102, 0.8)";
@@ -197,6 +220,19 @@ export class GridRenderer {
     }
 
     drawUnitSprite(ctx, u.spriteKey, x, y - ts * 0.03, ts * 0.95, u.side);
+    if (overlay.presentation?.hitFlashes.has(u.id)) {
+      ctx.fillStyle = "rgba(255,255,255,0.42)";
+      ctx.fillRect(this.offsetX + u.pos.x * ts + 2, this.offsetY + u.pos.y * ts + 2, ts - 4, ts - 4);
+    }
+    if (overlay.presentation?.shieldPulses.has(u.id)) {
+      ctx.strokeStyle = "rgba(107,184,255,0.8)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, ts * 0.44, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    const dissolving = overlay.presentation?.dissolves.has(u.id);
+    if (dissolving) ctx.globalAlpha = 0.35;
 
     // HP bar
     const hpPct = Math.max(0, u.hp / u.maxHp);
@@ -251,6 +287,37 @@ export class GridRenderer {
       ctx.textBaseline = "middle";
       ctx.fillText(String(n), px, py);
       px += 11;
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  private drawTargetLine(from: GridPos, to: GridPos): void {
+    const a = this.tileCenter(from);
+    const b = this.tileCenter(to);
+    const { ctx } = this;
+    ctx.strokeStyle = "rgba(155,232,255,0.8)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  private drawProjectiles(overlay: RenderOverlay): void {
+    const { ctx } = this;
+    const now = performance.now();
+    for (const p of overlay.presentation?.projectiles ?? []) {
+      const t = Math.max(0, Math.min(1, (now - p.start) / p.duration));
+      const a = this.tileCenter(p.from);
+      const b = this.tileCenter(p.to);
+      const x = a.x + (b.x - a.x) * t;
+      const y = a.y + (b.y - a.y) * t;
+      ctx.fillStyle = "rgba(255,190,120,0.9)";
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 

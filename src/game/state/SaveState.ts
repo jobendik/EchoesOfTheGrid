@@ -11,6 +11,7 @@ export interface GameSettings {
   sfxVolume: number;
   muted: boolean;
   showTutorial: boolean;
+  screenShake: number;
 }
 
 export const DEFAULT_SETTINGS: GameSettings = {
@@ -19,6 +20,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   sfxVolume: 0.8,
   muted: false,
   showTutorial: true,
+  screenShake: 1,
 };
 
 function storageAvailable(): boolean {
