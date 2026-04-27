@@ -20,7 +20,6 @@ export type RelicTrigger =
 export type RelicEffect =
   | { kind: "startCombatShield"; amount: number }
   | { kind: "bonusEnergy"; amount: number }
-  | { kind: "drawExtra"; amount: number }
   | { kind: "firstAttackBonusPerTurn"; amount: number }
   | { kind: "bonusDamageOnMarked"; amount: number }
   | { kind: "drawOnPush" }
@@ -32,7 +31,11 @@ export type RelicEffect =
   | { kind: "healOnKill"; amount: number }
   | { kind: "extraStatusStacks"; amount: number }
   | { kind: "discountFirstCard" }
-  | { kind: "shieldOnShieldCard"; amount: number };
+  | { kind: "shieldOnShieldCard"; amount: number }
+  | { kind: "startCombatRegen"; amount: number }
+  | { kind: "startCombatBurnEnemies"; amount: number }
+  | { kind: "bonusDamageIfMoved"; amount: number }
+  | { kind: "extraDrawPerTurn"; amount: number };
 
 export interface RelicDefinition {
   id: RelicId;

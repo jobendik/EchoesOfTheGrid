@@ -65,7 +65,12 @@ export class CombatScene {
       audio.play("turnStart");
       if (p.side === "player") this.overlay.cameraShake = 0;
     });
-    this.controller.events.on("shieldGained", (p) => this.pushFloater(p.unitId, `+${p.amount}`, "shield"));
+    this.controller.events.on("shieldGained", (p) => {
+      this.pushFloater(p.unitId, `+${p.amount}`, "shield");
+      audio.play("shieldGain");
+    });
+    this.controller.events.on("unitMoved", () => audio.play("movement"));
+    this.controller.events.on("statusApplied", () => audio.play("statusApply"));
   }
 
   dispose(): void {
@@ -179,7 +184,9 @@ export class CombatScene {
     this.rebuildEnemyList();
     this.rebuildPartyHud();
     this.rebuildHand();
-    this.turnIndicatorEl.textContent = `Turn ${this.controller.state.turn} · ${this.controller.state.phase === "player_turn" ? "Your Turn" : this.controller.state.phase}`;
+    const phaseLabel = this.controller.state.phase === "player_turn" ? "Your Turn" :
+      this.controller.state.phase === "enemy_turn" ? "Enemy Turn" : this.controller.state.phase;
+    this.turnIndicatorEl.textContent = `Turn ${this.controller.state.turn} · ${phaseLabel}`;
     const energySpan = this.energyEl.querySelector("#energy-value") as HTMLElement | null;
     if (energySpan) energySpan.textContent = `${this.controller.state.player.energy}/${this.controller.state.player.maxEnergy}`;
   }
@@ -237,7 +244,9 @@ export class CombatScene {
     clear(this.partyHudEl);
     for (const hero of this.controller.heroes()) {
       const hpPct = Math.max(0, (hero.hp / hero.maxHp) * 100);
+      const shield = hero.statuses["shield"] ?? 0;
       const active = hero.id === this.selectedHeroId;
+      const passive = HERO_PASSIVE_LABELS[hero.heroClass ?? ""] ?? "";
       const plate = el("div", {
         class: `hero-plate ${active ? "active" : ""}`,
         onClick: () => {
@@ -249,11 +258,15 @@ export class CombatScene {
       }, [
         el("div", { class: "name-row" }, [
           el("div", { class: "name", text: hero.name }),
-          el("div", { class: "hp-text", text: `${hero.hp}/${hero.maxHp}` }),
+          el("div", { class: "hp-text" }, [
+            el("span", { text: `${hero.hp}/${hero.maxHp}` }),
+            ...(shield > 0 ? [el("span", { class: "shield-badge", text: `🛡${shield}` })] : []),
+          ]),
         ]),
         el("div", { class: "hpbar" }, [
-          el("div", { class: "fill", style: { width: `${hpPct}%` } as Partial<CSSStyleDeclaration> }),
+          el("div", { class: "fill", style: { width: `${hpPct}%`, background: hpPct < 30 ? "linear-gradient(90deg,#ff4455,#ff6b7a)" : undefined } as Partial<CSSStyleDeclaration> }),
         ]),
+        passive ? el("div", { class: "passive-label dim", text: passive }) : el("div", {}),
         el("div", { class: "status-pills" }, renderStatusPills(hero)),
       ]);
       this.partyHudEl.appendChild(plate);
@@ -508,10 +521,16 @@ function renderStatusPills(u: Unit): HTMLElement[] {
   const out: HTMLElement[] = [];
   for (const [k, v] of Object.entries(u.statuses)) {
     if (!v || v <= 0) continue;
-    out.push(el("span", { class: "status-pill", text: `${k} ${v}` }));
+    out.push(el("span", { class: `status-pill status-${k}`, text: `${k} ${v}` }));
   }
   return out;
 }
+
+const HERO_PASSIVE_LABELS: Record<string, string> = {
+  vanguard:  "Passive: Start with 3 Shield",
+  riftblade: "Passive: Start with 1 Strength",
+  signalist: "Passive: Auto-mark nearest enemy",
+};
 
 function renderRelics(controller: CombatController): HTMLElement {
   const row = el("div", {}, [
