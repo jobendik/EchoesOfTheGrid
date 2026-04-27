@@ -40,6 +40,10 @@ export interface CombatEvents {
   stateChanged: { reason: string };
   cardPlayed: { instance: CardInstance; casterId: UnitId; target?: GridPos };
   damageDealt: { attackerId?: UnitId; defenderId: UnitId; amount: number };
+  unitMoved: { unitId: UnitId; from: GridPos; to: GridPos };
+  shieldGained: { unitId: UnitId; amount: number };
+  statusApplied: { unitId: UnitId; status: string; stacks: number };
+  enemyIntentResolved: { enemyId: UnitId; intentKind: string };
   unitDied: { unitId: UnitId };
   turnStart: { side: "player" | "enemy"; turn: number };
   turnEnd: { side: "player" | "enemy" };
@@ -431,9 +435,11 @@ export class CombatController {
     // Movement card relic: shield on move card
     if (def.type === "movement" && this.state.player.relics.includes("warding_stride")) {
       caster.statuses["shield"] = (caster.statuses["shield"] ?? 0) + 2;
+      this.events.emit("shieldGained", { unitId: caster.id, amount: 2 });
     }
     if (def.type === "skill" && def.tags.includes("defense") && this.state.player.relics.includes("bulwark_chip")) {
       caster.statuses["shield"] = (caster.statuses["shield"] ?? 0) + 1;
+      this.events.emit("shieldGained", { unitId: caster.id, amount: 1 });
     }
 
     // Resolve pending draws (from drawCards effects)
@@ -479,6 +485,7 @@ export class CombatController {
     for (const h of this.heroes()) {
       if (this.state.grid.getKind(h.pos) === "objective") {
         h.statuses["shield"] = (h.statuses["shield"] ?? 0) + 2;
+        this.events.emit("shieldGained", { unitId: h.id, amount: 2 });
         this.state.log.push({
           ts: Date.now(),
           kind: "status",
@@ -562,6 +569,7 @@ export class CombatController {
 
   private performEnemyAction(enemy: Unit, plan: PlannedEnemyAction): void {
     const act: EnemyTurnAction = plan.action;
+    this.events.emit("enemyIntentResolved", { enemyId: enemy.id, intentKind: act.kind });
     switch (act.kind) {
       case "wait":
         return;
@@ -625,15 +633,20 @@ export class CombatController {
       }
       case "buff_ally": {
         const ally = this.state.units.get(act.targetId);
-        if (ally) addStatus(this.state, ally, act.status, act.stacks);
+        if (ally) {
+          addStatus(this.state, ally, act.status, act.stacks);
+          this.events.emit("statusApplied", { unitId: ally.id, status: act.status, stacks: act.stacks });
+        }
         return;
       }
       case "shield_self":
         addStatus(this.state, enemy, "shield", act.amount);
+        this.events.emit("shieldGained", { unitId: enemy.id, amount: act.amount });
         return;
       case "overwatch":
         // Apply a marker status for UI; behavior consumed on next player move.
         enemy.statuses["overwatch"] = 1;
+        this.events.emit("statusApplied", { unitId: enemy.id, status: "overwatch", stacks: 1 });
         this.state.log.push({ ts: Date.now(), kind: "intent", text: `${enemy.name} enters overwatch.` });
         return;
       case "summon_hazard":
@@ -656,7 +669,9 @@ export class CombatController {
       if (!this.state.grid.isWalkable(step)) break;
       const occ = unitAt(this.state, step);
       if (occ && occ.id !== enemy.id) break;
+      const from = { x: enemy.pos.x, y: enemy.pos.y };
       enemy.pos = { x: step.x, y: step.y };
+      this.events.emit("unitMoved", { unitId: enemy.id, from, to: { x: step.x, y: step.y } });
       stepsLeft -= 1;
       if (this.state.grid.getKind(enemy.pos) === "hazard") {
         const res = applyDamage(undefined, enemy, 3, this.state);

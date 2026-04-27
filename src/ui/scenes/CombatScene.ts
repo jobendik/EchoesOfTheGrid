@@ -7,6 +7,7 @@ import { computeAffectedTiles, isValidTarget, unitAt } from "../../game/combat/T
 import type { GridPos, UnitId } from "../../core/Types.js";
 import type { Unit } from "../../game/units/UnitTypes.js";
 import { GridRenderer, type RenderOverlay } from "../../render/GridRenderer.js";
+import { CombatPresentationQueue } from "../combat/CombatPresentationQueue.js";
 import { cardTooltip, renderCard, formatKeywords } from "../CardView.js";
 import { attachTooltip, clear, el } from "../UIHelpers.js";
 import type { GameApp } from "../GameApp.js";
@@ -41,8 +42,13 @@ export class CombatScene {
     activeHeroId: null,
     cameraShake: 0,
     floaters: [],
+    movementRange: [],
+    attackRange: [],
+    targetLine: null,
   };
   private animTick: number | null = null;
+  private presentation = new CombatPresentationQueue();
+  private hoveredCard: CardInstance | null = null;
 
   constructor(readonly app: GameApp, controller: CombatController) {
     this.controller = controller;
@@ -50,6 +56,7 @@ export class CombatScene {
     this.build();
     this.selectedHeroId = this.controller.heroes()[0]?.id ?? null;
     this.overlay.activeHeroId = this.selectedHeroId;
+    this.presentation.bind(this.controller);
     this.startRenderLoop();
     this.controller.events.on("damageDealt", (p) => this.pushFloater(p.defenderId, `-${p.amount}`, "damage"));
     this.controller.events.on("combatEnded", (p) => this.handleCombatEnd(p.victory));
@@ -58,6 +65,7 @@ export class CombatScene {
       audio.play("turnStart");
       if (p.side === "player") this.overlay.cameraShake = 0;
     });
+    this.controller.events.on("shieldGained", (p) => this.pushFloater(p.unitId, `+${p.amount}`, "shield"));
   }
 
   dispose(): void {
@@ -156,8 +164,10 @@ export class CombatScene {
   private startRenderLoop(): void {
     const loop = (): void => {
       this.renderer.resize(this.controller.state);
+      this.presentation.update(performance.now(), this.app.getSettings().screenShake);
+      this.overlay.presentation = this.presentation.state;
       if (this.overlay.cameraShake > 0) this.overlay.cameraShake = Math.max(0, this.overlay.cameraShake - 0.4);
-      this.renderer.draw(this.controller.state, this.overlay);
+      if (performance.now() >= this.presentation.state.hitStopUntil) this.renderer.draw(this.controller.state, this.overlay);
       this.renderLog();
       this.renderDebug();
       this.animTick = requestAnimationFrame(loop);
@@ -255,18 +265,18 @@ export class CombatScene {
     for (const [idx, card] of this.controller.state.hand.entries()) {
       const cost = this.controller.effectiveCost(card);
       const caster = this.activeHero();
-      const disabled =
-        !caster ||
-        this.controller.state.phase !== "player_turn" ||
-        this.controller.state.player.energy < cost ||
-        getCardDef(card.defId).unplayable === true;
+      const disabledReason = this.disabledReason(card, caster?.id, cost);
+      const disabled = !!disabledReason;
       const node = renderCard(card, {
         selected: this.selectedCard === card,
         disabled,
+        disabledReason: disabledReason ?? undefined,
         cost,
         onClick: () => this.onCardClick(card),
+        onMouseEnter: () => { this.hoveredCard = card; this.recomputePreviews(); },
+        onMouseLeave: () => { this.hoveredCard = null; this.recomputePreviews(); },
       });
-      attachTooltip(node, () => cardTooltip(card));
+      attachTooltip(node, () => cardTooltip(card, disabledReason ?? undefined));
       // Key hint
       node.appendChild(el("div", {
         style: { position: "absolute", bottom: "-10px", left: "50%", transform: "translateX(-50%)", background: "var(--c-bg-2)", border: "1px solid var(--c-border)", borderRadius: "4px", padding: "0 4px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--c-fg-muted)" } as Partial<CSSStyleDeclaration>,
@@ -346,6 +356,12 @@ export class CombatScene {
     this.overlay.validTiles = [];
     this.overlay.selectedTiles = [];
     const card = this.selectedCard;
+    const hero = this.activeHero();
+    if (hero) {
+      this.overlay.movementRange = Array.from(this.controller.state.grid.all()).filter((t) => Math.abs(t.x - hero.pos.x) + Math.abs(t.y - hero.pos.y) <= hero.moveRange);
+      const reach = hero.attackRange ?? 1;
+      this.overlay.attackRange = Array.from(this.controller.state.grid.all()).filter((t) => Math.abs(t.x - hero.pos.x) + Math.abs(t.y - hero.pos.y) <= reach);
+    }
     if (!card) return;
     const def = getCardDef(card.defId);
     const caster = this.activeHero();
@@ -357,18 +373,34 @@ export class CombatScene {
     }
   }
 
+
+  private recomputePreviews(): void {
+    this.overlay.selectedTiles = [];
+    const card = this.selectedCard ?? this.hoveredCard;
+    if (!card || !this.overlay.hoverTile) return;
+    const caster = this.activeHero();
+    const def = getCardDef(card.defId);
+    if (caster && isValidTarget(this.controller.state, caster, def, this.overlay.hoverTile)) {
+      this.overlay.selectedTiles = computeAffectedTiles(this.controller.state, caster, def, this.overlay.hoverTile);
+      this.overlay.targetLine = { from: { x: caster.pos.x, y: caster.pos.y }, to: { x: this.overlay.hoverTile.x, y: this.overlay.hoverTile.y } };
+    } else {
+      this.overlay.targetLine = null;
+    }
+  }
+
+  private disabledReason(card: CardInstance, casterId: UnitId | undefined, cost: number): string | null {
+    const def = getCardDef(card.defId);
+    if (this.controller.state.phase !== "player_turn") return "Only playable during your turn.";
+    if (!casterId) return "Select a hero to play this card.";
+    if (def.unplayable) return "This card cannot be played directly.";
+    if (this.controller.state.player.energy < cost) return `Need ${cost} energy.`;
+    return null;
+  }
   private onCanvasMouseMove(ev: MouseEvent): void {
     const rect = this.canvas.getBoundingClientRect();
     const p = this.renderer.pickTile(ev.clientX - rect.left, ev.clientY - rect.top, this.controller.state);
     this.overlay.hoverTile = p;
-    this.overlay.selectedTiles = [];
-    if (this.selectedCard && p) {
-      const caster = this.activeHero();
-      const def = getCardDef(this.selectedCard.defId);
-      if (caster && isValidTarget(this.controller.state, caster, def, p)) {
-        this.overlay.selectedTiles = computeAffectedTiles(this.controller.state, caster, def, p);
-      }
-    }
+    this.recomputePreviews();
     // Hover intent for enemies
     if (p) {
       const u = unitAt(this.controller.state, p);
@@ -407,7 +439,7 @@ export class CombatScene {
       return;
     }
     audio.play("cardPlay");
-    this.overlay.cameraShake = 2;
+    this.overlay.cameraShake = 2 * this.app.getSettings().screenShake;
     this.selectedCard = null;
     this.recomputeValidTiles();
     this.rebuildSidebar();
@@ -424,7 +456,7 @@ export class CombatScene {
     // Resolve enemy turn with a brief delay for readability
     window.setTimeout(() => {
       this.controller.resolveEnemyTurn();
-      this.overlay.cameraShake = 6;
+      this.overlay.cameraShake = 6 * this.app.getSettings().screenShake;
       audio.play("enemyAttack");
       this.rebuildSidebar();
     }, 400);
@@ -440,7 +472,7 @@ export class CombatScene {
       kind,
       start: performance.now(),
     });
-    if (kind === "damage") this.overlay.cameraShake = Math.max(this.overlay.cameraShake, 4);
+    if (kind === "damage") this.overlay.cameraShake = Math.max(this.overlay.cameraShake, 4 * this.app.getSettings().screenShake);
     audio.play("hit");
   }
 

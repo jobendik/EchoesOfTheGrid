@@ -13,6 +13,7 @@ export function renderCard(
     selected?: boolean;
     disabled?: boolean;
     cost?: number;
+    disabledReason?: string;
     onClick?: () => void;
     onMouseEnter?: () => void;
     onMouseLeave?: () => void;
@@ -25,6 +26,7 @@ export function renderCard(
   const desc = isUpgraded && def.upgradedDescription ? def.upgradedDescription : def.description;
   const cls = [
     "card",
+    `type-${def.type}`,
     `rarity-${def.rarity}`,
     isUpgraded ? "upgraded" : "",
     opts.selected ? "selected" : "",
@@ -48,6 +50,7 @@ export function renderCard(
     el("div", { class: "type", text: typeLabel }),
     el("div", { class: "art" }, [makeCardArt(def.id, def.type)]),
     el("div", { class: "desc", html: formatKeywords(desc) }),
+    opts.disabledReason ? el("div", { class: "disabled-reason", text: opts.disabledReason }) : null,
     keywordText ? el("div", { class: "keywords", text: keywordText }) : null,
   ].filter(Boolean) as (Node | null)[]);
 }
@@ -102,7 +105,7 @@ export function formatKeywords(desc: string): string {
 }
 
 /** Build a hover tooltip for a card, showing full description + keywords. */
-export function cardTooltip(card: CardInstance): HTMLElement {
+export function cardTooltip(card: CardInstance, disabledReason?: string): HTMLElement {
   const def = getCardDef(card.defId);
   const name = card.upgraded ? `${def.name}+` : def.name;
   const desc = card.upgraded && def.upgradedDescription ? def.upgradedDescription : def.description;
@@ -119,6 +122,12 @@ export function cardTooltip(card: CardInstance): HTMLElement {
         el("span", { html: `<strong>${k.name}:</strong> ${k.description}` }),
       ]),
     );
+  }
+  if (disabledReason) {
+    container.appendChild(el("div", {
+      style: { marginTop: "8px", color: "var(--c-invalid)" } as Partial<CSSStyleDeclaration>,
+      text: `Disabled: ${disabledReason}`,
+    }));
   }
   return container;
 }

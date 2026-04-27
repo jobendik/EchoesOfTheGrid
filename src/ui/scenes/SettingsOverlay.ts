@@ -22,9 +22,18 @@ export function renderSettingsOverlay(app: GameApp, settings: GameSettings): HTM
     audio.setVolume(v);
     app.saveSettings(settings);
   }));
+  card.appendChild(makeSlider("Music Volume", settings.musicVolume, (v) => {
+    settings.musicVolume = v;
+    audio.setMusicVolume(v);
+    app.saveSettings(settings);
+  }));
   card.appendChild(makeSlider("SFX Volume", settings.sfxVolume, (v) => {
     settings.sfxVolume = v;
     audio.setSfxVolume(v);
+    app.saveSettings(settings);
+  }));
+  card.appendChild(makeSlider("Screen Shake", settings.screenShake, (v) => {
+    settings.screenShake = v;
     app.saveSettings(settings);
   }));
 

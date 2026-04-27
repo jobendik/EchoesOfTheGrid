@@ -473,6 +473,10 @@ h3 { font-size: 16px; }
 .card.rarity-rare { border-color: #c9a8ff; }
 .card.rarity-uncommon { border-color: #7be8a0; }
 .card.rarity-curse { border-color: #a02040; background: linear-gradient(180deg, #2b0d16, #170607); }
+.card.type-attack { box-shadow: inset 0 0 0 1px rgba(255,107,122,0.2), var(--shadow-card); }
+.card.type-skill { box-shadow: inset 0 0 0 1px rgba(123,232,160,0.2), var(--shadow-card); }
+.card.type-movement { box-shadow: inset 0 0 0 1px rgba(199,147,255,0.2), var(--shadow-card); }
+.card .disabled-reason { margin-top: 4px; font-size: 10px; color: var(--c-invalid); text-align: center; }
 .card .art {
   height: 80px;
   margin-top: 6px;

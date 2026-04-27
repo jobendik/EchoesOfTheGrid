@@ -50,7 +50,9 @@ export class GameApp {
     this.settings = loadSettings();
     audio.setVolume(this.settings.masterVolume);
     audio.setSfxVolume(this.settings.sfxVolume);
+    audio.setMusicVolume(this.settings.musicVolume);
     audio.setMuted(this.settings.muted);
+    audio.startMusic();
     this.rng = new RNG(Date.now());
     this.render(renderMainMenu(this, this.randomSeedLabel()));
   }
@@ -81,6 +83,10 @@ export class GameApp {
     return Math.random().toString(36).slice(2, 8).toUpperCase();
   }
 
+
+  getSettings(): GameSettings {
+    return this.settings;
+  }
   runSeedLabel(): string {
     return this.run?.seed ?? "—";
   }
@@ -133,6 +139,11 @@ export class GameApp {
     };
     saveRun(this.run);
     this.showMap();
+    if (this.settings.showTutorial) {
+      this.showHelp();
+      this.settings.showTutorial = false;
+      this.saveSettings(this.settings);
+    }
   }
 
   continueRun(): void {
@@ -373,6 +384,11 @@ export class GameApp {
     this.run.pendingReward = null;
     saveRun(this.run);
     this.showMap();
+    if (this.settings.showTutorial) {
+      this.showHelp();
+      this.settings.showTutorial = false;
+      this.saveSettings(this.settings);
+    }
   }
 
   acceptRelic(id: string): void {
@@ -391,6 +407,11 @@ export class GameApp {
     this.run.pendingReward = null;
     saveRun(this.run);
     this.showMap();
+    if (this.settings.showTutorial) {
+      this.showHelp();
+      this.settings.showTutorial = false;
+      this.saveSettings(this.settings);
+    }
   }
 
   skipRewards(): void {
@@ -399,6 +420,11 @@ export class GameApp {
     this.run.pendingReward = null;
     saveRun(this.run);
     this.showMap();
+    if (this.settings.showTutorial) {
+      this.showHelp();
+      this.settings.showTutorial = false;
+      this.saveSettings(this.settings);
+    }
   }
 
   // ── Events & rest ───────────────────────────────────────────────────────
@@ -409,6 +435,11 @@ export class GameApp {
     this.markCurrentNodeCompleted();
     saveRun(this.run);
     this.showMap();
+    if (this.settings.showTutorial) {
+      this.showHelp();
+      this.settings.showTutorial = false;
+      this.saveSettings(this.settings);
+    }
   }
 
   private markCurrentNodeCompleted(): void {
@@ -509,6 +540,11 @@ export class GameApp {
     this.markCurrentNodeCompleted();
     saveRun(this.run);
     this.showMap();
+    if (this.settings.showTutorial) {
+      this.showHelp();
+      this.settings.showTutorial = false;
+      this.saveSettings(this.settings);
+    }
   }
 
   // ── Shop ────────────────────────────────────────────────────────────────
@@ -615,6 +651,11 @@ export class GameApp {
     this.run.rngState = this.rng.snapshot();
     saveRun(this.run);
     this.showMap();
+    if (this.settings.showTutorial) {
+      this.showHelp();
+      this.settings.showTutorial = false;
+      this.saveSettings(this.settings);
+    }
   }
 
   // ── Settings / Help ─────────────────────────────────────────────────────

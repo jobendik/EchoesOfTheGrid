@@ -1,4 +1,5 @@
 import { resolveAsset } from "../data/assets.js";
+import { assetCache } from "./AssetCache.js";
 import type { AssetKey } from "../core/Types.js";
 
 /**
@@ -27,6 +28,14 @@ export function drawUnitSprite(
   const color = entry?.color ?? (side === "player" ? "#6bb8ff" : "#ff6b7a");
   const shape = entry?.shape ?? "circle";
   const half = size * 0.42;
+
+  const productionImage = assetCache.getImage(assetKey);
+  if (productionImage) {
+    const w = size * 0.88;
+    const h = size * 0.88;
+    ctx.drawImage(productionImage, cx - w / 2, cy - h / 2, w, h);
+    return;
+  }
 
   // Glow
   const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, size * 0.6);

@@ -40,6 +40,8 @@ export class AudioManager {
   private muted = false;
   private volume = 0.8;
   private sfxVolume = 1;
+  private musicVolume = 0.6;
+  private musicTimer: number | null = null;
 
   constructor() {
     // Defer creation until first user gesture (browser autoplay policy).
@@ -75,6 +77,42 @@ export class AudioManager {
 
   setSfxVolume(v: number): void {
     this.sfxVolume = Math.max(0, Math.min(1, v));
+  }
+
+  setMusicVolume(v: number): void {
+    this.musicVolume = Math.max(0, Math.min(1, v));
+  }
+
+  startMusic(): void {
+    if (typeof window === "undefined" || this.musicTimer !== null) return;
+    this.musicTimer = window.setInterval(() => this.playMusicPulse(), 2200);
+    this.playMusicPulse();
+  }
+
+  stopMusic(): void {
+    if (this.musicTimer !== null) window.clearInterval(this.musicTimer);
+    this.musicTimer = null;
+  }
+
+  private playMusicPulse(): void {
+    if (this.muted || this.musicVolume <= 0.001) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.master) return;
+    const t0 = ctx.currentTime;
+    const notes = [130.81, 196.0, 261.63];
+    for (let i = 0; i < notes.length; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(notes[i], t0 + i * 0.08);
+      gain.gain.setValueAtTime(0.0001, t0 + i * 0.08);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, 0.035 * this.musicVolume), t0 + i * 0.08 + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + i * 0.08 + 1.2);
+      osc.connect(gain);
+      gain.connect(this.master);
+      osc.start(t0 + i * 0.08);
+      osc.stop(t0 + i * 0.08 + 1.25);
+    }
   }
 
   /**
